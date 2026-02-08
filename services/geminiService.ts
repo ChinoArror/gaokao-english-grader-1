@@ -1,10 +1,5 @@
-import { GoogleGenAI } from "@google/genai";
 import { EssayType, InputMethod, EssaySubmission } from '../types';
 import { getPromptForType } from '../constants';
-
-// SECURITY: The API key is obtained exclusively from the environment variable.
-// It is NOT hardcoded in the source code.
-const API_KEY = process.env.API_KEY;
 
 // Helper to convert File to Base64
 const fileToGenerativePart = async (file: File): Promise<string> => {
@@ -22,14 +17,6 @@ const fileToGenerativePart = async (file: File): Promise<string> => {
 };
 
 export const gradeEssay = async (submission: EssaySubmission): Promise<string> => {
-  // Strict check: Ensure the environment variable is present.
-  if (!API_KEY) {
-    throw new Error("Critical Configuration Error: process.env.API_KEY is missing. The application cannot authenticate with the AI service.");
-  }
-
-  const ai = new GoogleGenAI({ apiKey: API_KEY });
-  const modelId = 'gemini-3-flash-preview'; // Using Gemini 3.0 Flash for speed and intelligence
-
   let promptTemplate = getPromptForType(submission.type);
   let finalContents: any = [];
 
@@ -38,8 +25,8 @@ export const gradeEssay = async (submission: EssaySubmission): Promise<string> =
     const filledPrompt = promptTemplate
       .replace('{{QUESTION}}', submission.questionText)
       .replace('{{CONTENT}}', submission.essayContent);
-    
-    finalContents = [{ text: filledPrompt }];
+
+    finalContents = [{ parts: [{ text: filledPrompt }] }];
 
   } else {
     // Image based submission
@@ -55,13 +42,13 @@ export const gradeEssay = async (submission: EssaySubmission): Promise<string> =
       ${promptTemplate.replace('{{QUESTION}}', '[See Question Images]').replace('{{CONTENT}}', '[See Essay Images]')}
     `;
 
-    finalContents.push({ text: instructions });
+    const parts: any[] = [{ text: instructions }];
 
     // Add Question Images
     if (submission.questionImages && submission.questionImages.length > 0) {
       for (const file of submission.questionImages) {
         const qImageBase64 = await fileToGenerativePart(file);
-        finalContents.push({
+        parts.push({
           inlineData: {
             mimeType: file.type,
             data: qImageBase64
@@ -74,7 +61,7 @@ export const gradeEssay = async (submission: EssaySubmission): Promise<string> =
     if (submission.essayImages && submission.essayImages.length > 0) {
       for (const file of submission.essayImages) {
         const eImageBase64 = await fileToGenerativePart(file);
-        finalContents.push({
+        parts.push({
           inlineData: {
             mimeType: file.type,
             data: eImageBase64
@@ -82,23 +69,42 @@ export const gradeEssay = async (submission: EssaySubmission): Promise<string> =
         });
       }
     }
+
+    finalContents = [{ parts: parts }];
   }
 
   try {
-    const response = await ai.models.generateContent({
-      model: modelId,
-      contents: { parts: finalContents },
-      config: {
-        // High max tokens to ensure full feedback and sample essay
-        maxOutputTokens: 4096, 
-        thinkingConfig: { thinkingBudget: 1024 } // Use thinking for better reasoning on grading
-      }
+    const response = await fetch('/api/grade', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        contents: finalContents,
+        generationConfig: {
+          maxOutputTokens: 4096,
+          thinkingConfig: { thinkingBudget: 1024 } // Optional, might be ignored by some models
+        }
+      })
     });
 
-    return response.text || "No response generated.";
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || `Server Error: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    // Extract text from Gemini response structure
+    // structure: { candidates: [ { content: { parts: [ { text: "..." } ] } } ] }
+    if (data.candidates && data.candidates.length > 0 && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts.length > 0) {
+      return data.candidates[0].content.parts[0].text;
+    } else {
+      return "No response generated from AI.";
+    }
+
   } catch (error: any) {
-    // Security: Do NOT log the full 'error' object as it might contain the request URL with the API Key.
-    console.error("Gemini API Error:", error.message ? error.message : "Unknown error occurred");
-    throw new Error("Failed to grade essay. Please check your connection and try again.");
+    console.error("Grading API Error:", error);
+    throw new Error(error.message || "Failed to grade essay. Please check your connection and try again.");
   }
 };
