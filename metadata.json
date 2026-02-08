@@ -1,0 +1,5 @@
+{
+  "name": "Gaokao English Grader",
+  "description": "An AI-powered application using Gemini 3.0 to grade Chinese Gaokao English Practical Writing and Continuation Writing tasks based on strict scoring standards.",
+  "requestFramePermissions": []
+}
