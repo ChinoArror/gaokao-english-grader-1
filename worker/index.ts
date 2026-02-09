@@ -295,7 +295,13 @@ export default {
                 const body = await request.json() as any;
                 const { payload, meta } = body;
 
-                const apiKey = env.API_KEY || '';
+                const apiKey = env.API_KEY;
+                if (!apiKey) {
+                    return jsonResponse({
+                        error: 'Configuration Error',
+                        message: 'API_KEY is not set in environment variables. Please set it using "wrangler secret put API_KEY".'
+                    }, 500);
+                }
                 const modelName = env.MODEL_NAME || 'gemini-3-pro-preview';
                 const apiUrl = `https://${env.API_DOMAIN || 'generativelanguage.googleapis.com'}/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 

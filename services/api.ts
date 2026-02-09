@@ -117,7 +117,7 @@ export const api = {
 
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.error || 'Failed to grade essay');
+            throw new Error(error.message || error.details || error.error || 'Failed to grade essay');
         }
 
         return await response.json();
