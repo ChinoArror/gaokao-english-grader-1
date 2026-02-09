@@ -27,4 +27,33 @@ export interface GradingResult {
 
 export interface AuthState {
   isAuthenticated: boolean;
+  token?: string;
+  username?: string;
+  role?: 'admin' | 'user';
+  userId?: number;
+}
+
+export interface User {
+  id: number;
+  username: string;
+  password?: string;
+  created_at: number;
+}
+
+export interface HistoryRecord {
+  id: number;
+  user_id: number;
+  timestamp: number;
+  topic: string;
+  original_content: string;
+  feedback: string;
+}
+
+export interface LoginResponse {
+  success: boolean;
+  token?: string;
+  role?: 'admin' | 'user';
+  username?: string;
+  userId?: number;
+  error?: string;
 }

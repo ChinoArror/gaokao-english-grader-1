@@ -12,7 +12,14 @@ binding = "ASSETS"
 pattern = "eng.aryuki.com"
 custom_domain = true
 
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "gaokao-en-grader-db"
+database_id = "ea2e5dd2-682e-4fdb-89e3-668706ad39d1"
+
 [vars]
-# Default values for environment variables (safest to override in dashboard)
 API_DOMAIN = "generativelanguage.googleapis.com"
-MODEL_NAME = "gemini-2.0-flash-exp"
+MODEL_NAME = "gemini-3-pro-preview"
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "admin123"

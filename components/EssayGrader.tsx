@@ -3,17 +3,24 @@ import { EssayType, InputMethod, EssaySubmission } from '../types';
 import { gradeEssay } from '../services/geminiService';
 import { marked } from 'marked';
 
-export const EssayGrader: React.FC = () => {
+interface EssayGraderProps {
+  onNavigateToHistory?: () => void;
+  onLogout?: () => void;
+}
+
+export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, onLogout }) => {
   const [essayType, setEssayType] = useState<EssayType>(EssayType.PRACTICAL);
   const [inputMethod, setInputMethod] = useState<InputMethod>(InputMethod.TEXT);
   const [questionText, setQuestionText] = useState('');
   const [essayContent, setEssayContent] = useState('');
-  
+
   const [questionImages, setQuestionImages] = useState<File[]>([]);
   const [essayImages, setEssayImages] = useState<File[]>([]);
-  
+
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [transcription, setTranscription] = useState<string | null>(null);
+  const [showTranscription, setShowTranscription] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -24,17 +31,17 @@ export const EssayGrader: React.FC = () => {
 
     // Validation
     if (inputMethod === InputMethod.TEXT) {
-        if (!questionText.trim() || !essayContent.trim()) {
-            setError("Please fill in both the Question and Essay content.");
-            setIsLoading(false);
-            return;
-        }
+      if (!questionText.trim() || !essayContent.trim()) {
+        setError("Please fill in both the Question and Essay content.");
+        setIsLoading(false);
+        return;
+      }
     } else {
-        if (questionImages.length === 0 || essayImages.length === 0) {
-            setError("Please upload both the Question image(s) and Essay image(s).");
-            setIsLoading(false);
-            return;
-        }
+      if (questionImages.length === 0 || essayImages.length === 0) {
+        setError("Please upload both the Question image(s) and Essay image(s).");
+        setIsLoading(false);
+        return;
+      }
     }
 
     const submission: EssaySubmission = {
@@ -47,8 +54,12 @@ export const EssayGrader: React.FC = () => {
     };
 
     try {
-      const responseText = await gradeEssay(submission);
-      setResult(responseText);
+      const response = await gradeEssay(submission);
+      setResult(response.feedback);
+      setTranscription(null);
+      if (response.transcription) {
+        setTranscription(response.transcription);
+      }
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred.");
     } finally {
@@ -89,32 +100,55 @@ export const EssayGrader: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center space-x-3 group cursor-default">
             <div className="bg-gradient-to-br from-blue-600 to-indigo-600 text-white p-2.5 rounded-xl shadow-lg shadow-blue-500/20 group-hover:scale-105 transition-transform duration-300">
-               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-               </svg>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
             </div>
             <h1 className="text-xl font-bold text-gray-900 tracking-tight">AI Gaokao Grader</h1>
           </div>
-          <span className="text-xs font-semibold px-3 py-1 rounded-full bg-blue-50 text-blue-600 border border-blue-100">
-            Gemini 3.0
-          </span>
+          <div className="flex items-center gap-3">
+            {onNavigateToHistory && (
+              <button
+                onClick={onNavigateToHistory}
+                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-semibold rounded-xl shadow-lg shadow-purple-500/30 hover:shadow-purple-600/40 transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-300 text-sm"
+              >
+                <span className="flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  History
+                </span>
+              </button>
+            )}
+            {onLogout && (
+              <button
+                onClick={onLogout}
+                className="px-4 py-2 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 text-white font-semibold rounded-xl shadow-lg shadow-red-500/30 hover:shadow-red-600/40 transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-300 text-sm"
+              >
+                Logout
+              </button>
+            )}
+            <span className="text-xs font-semibold px-3 py-1 rounded-full bg-blue-50 text-blue-600 border border-blue-100">
+              Gemini 3.0
+            </span>
+          </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-0 sm:px-6 lg:px-8 py-0 sm:py-8 animate-fade-in">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 sm:gap-8 lg:gap-10">
-          
+
           {/* LEFT COLUMN: INPUTS - Hidden when printing */}
           <div className="space-y-0 sm:space-y-8 input-section no-print">
-            
+
             {/* Configuration Card */}
             <div className="bg-white sm:rounded-3xl shadow-none sm:shadow-lg sm:shadow-gray-200/50 border-b sm:border border-gray-100 p-6 sm:p-8 transition-all hover:shadow-xl hover:shadow-gray-200/50">
               <h2 className="text-lg font-bold text-gray-800 mb-6 flex items-center">
                 <span className="w-1.5 h-6 bg-blue-500 rounded-full mr-3"></span>
                 Task Configuration
               </h2>
-              
+
               {/* Essay Type Selection */}
               <div className="mb-8">
                 <label className="block text-sm font-semibold text-gray-600 mb-3 ml-1">Essay Type</label>
@@ -122,11 +156,10 @@ export const EssayGrader: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setEssayType(EssayType.PRACTICAL)}
-                    className={`relative overflow-hidden flex flex-col items-center justify-center p-4 rounded-2xl border-2 transition-all duration-300 ${
-                      essayType === EssayType.PRACTICAL
-                        ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-md transform scale-[1.02]'
-                        : 'border-gray-100 bg-white hover:border-blue-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700'
-                    }`}
+                    className={`relative overflow-hidden flex flex-col items-center justify-center p-4 rounded-2xl border-2 transition-all duration-300 ${essayType === EssayType.PRACTICAL
+                      ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-md transform scale-[1.02]'
+                      : 'border-gray-100 bg-white hover:border-blue-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700'
+                      }`}
                   >
                     <span className="font-bold text-sm sm:text-base z-10">Practical Writing</span>
                     <span className="text-xs mt-1 opacity-75 font-medium z-10">应用文 (15分)</span>
@@ -134,11 +167,10 @@ export const EssayGrader: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setEssayType(EssayType.CONTINUATION)}
-                    className={`relative overflow-hidden flex flex-col items-center justify-center p-4 rounded-2xl border-2 transition-all duration-300 ${
-                      essayType === EssayType.CONTINUATION
-                        ? 'border-purple-500 bg-purple-50 text-purple-700 shadow-md transform scale-[1.02]'
-                        : 'border-gray-100 bg-white hover:border-purple-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700'
-                    }`}
+                    className={`relative overflow-hidden flex flex-col items-center justify-center p-4 rounded-2xl border-2 transition-all duration-300 ${essayType === EssayType.CONTINUATION
+                      ? 'border-purple-500 bg-purple-50 text-purple-700 shadow-md transform scale-[1.02]'
+                      : 'border-gray-100 bg-white hover:border-purple-200 hover:bg-gray-50 text-gray-500 hover:text-gray-700'
+                      }`}
                   >
                     <span className="font-bold text-sm sm:text-base z-10">Continuation</span>
                     <span className="text-xs mt-1 opacity-75 font-medium z-10">读后续写 (25分)</span>
@@ -152,21 +184,19 @@ export const EssayGrader: React.FC = () => {
                 <div className="flex space-x-1 bg-gray-100/80 p-1.5 rounded-2xl border border-gray-100">
                   <button
                     onClick={() => setInputMethod(InputMethod.TEXT)}
-                    className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-300 ${
-                      inputMethod === InputMethod.TEXT
-                        ? 'bg-white shadow-sm text-gray-900'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
+                    className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-300 ${inputMethod === InputMethod.TEXT
+                      ? 'bg-white shadow-sm text-gray-900'
+                      : 'text-gray-500 hover:text-gray-700'
+                      }`}
                   >
                     Manual Input
                   </button>
                   <button
                     onClick={() => setInputMethod(InputMethod.IMAGE)}
-                    className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-300 ${
-                      inputMethod === InputMethod.IMAGE
-                        ? 'bg-white shadow-sm text-gray-900'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
+                    className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-300 ${inputMethod === InputMethod.IMAGE
+                      ? 'bg-white shadow-sm text-gray-900'
+                      : 'text-gray-500 hover:text-gray-700'
+                      }`}
                   >
                     Upload Images
                   </button>
@@ -176,7 +206,7 @@ export const EssayGrader: React.FC = () => {
 
             {/* Input Form */}
             <form onSubmit={handleSubmit} className="bg-white sm:rounded-3xl shadow-none sm:shadow-lg sm:shadow-gray-200/50 border-b sm:border border-gray-100 p-6 sm:p-8 transition-all hover:shadow-xl hover:shadow-gray-200/50">
-               <h2 className="text-lg font-bold text-gray-800 mb-6 flex items-center">
+              <h2 className="text-lg font-bold text-gray-800 mb-6 flex items-center">
                 <span className="w-1.5 h-6 bg-indigo-500 rounded-full mr-3"></span>
                 Submission Content
               </h2>
@@ -217,7 +247,7 @@ export const EssayGrader: React.FC = () => {
                     <div className="group mt-1 flex justify-center px-6 pt-8 pb-8 border-2 border-gray-200 border-dashed rounded-2xl hover:border-blue-400 hover:bg-blue-50/30 transition-all duration-300 cursor-pointer relative overflow-hidden">
                       <div className="space-y-2 text-center relative z-10">
                         <div className="mx-auto h-12 w-12 text-gray-300 group-hover:text-blue-500 transition-colors duration-300 flex items-center justify-center bg-gray-50 group-hover:bg-white rounded-full">
-                           <svg className="h-8 w-8" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                          <svg className="h-8 w-8" stroke="currentColor" fill="none" viewBox="0 0 48 48">
                             <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                           </svg>
                         </div>
@@ -244,9 +274,9 @@ export const EssayGrader: React.FC = () => {
                       2. Essay Images
                     </label>
                     <div className="group mt-1 flex justify-center px-6 pt-8 pb-8 border-2 border-gray-200 border-dashed rounded-2xl hover:border-blue-400 hover:bg-blue-50/30 transition-all duration-300 cursor-pointer relative overflow-hidden">
-                       <div className="space-y-2 text-center relative z-10">
+                      <div className="space-y-2 text-center relative z-10">
                         <div className="mx-auto h-12 w-12 text-gray-300 group-hover:text-blue-500 transition-colors duration-300 flex items-center justify-center bg-gray-50 group-hover:bg-white rounded-full">
-                           <svg className="h-8 w-8" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                          <svg className="h-8 w-8" stroke="currentColor" fill="none" viewBox="0 0 48 48">
                             <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                           </svg>
                         </div>
@@ -255,7 +285,7 @@ export const EssayGrader: React.FC = () => {
                             <span>Upload files</span>
                             <input type="file" className="sr-only" accept="image/*" multiple onChange={handleFileChange(setEssayImages)} />
                           </label>
-                           <p className="pl-1">or drag and drop</p>
+                          <p className="pl-1">or drag and drop</p>
                         </div>
                         {essayImages.length > 0 && (
                           <div className="mt-2 text-center animate-fade-in">
@@ -272,7 +302,7 @@ export const EssayGrader: React.FC = () => {
 
               {error && (
                 <div className="mt-6 p-4 bg-red-50 border border-red-100 rounded-2xl text-red-600 text-sm flex items-center animate-fade-in">
-                   <svg className="w-5 h-5 mr-2 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                  <svg className="w-5 h-5 mr-2 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                   {error}
                 </div>
               )}
@@ -281,11 +311,10 @@ export const EssayGrader: React.FC = () => {
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className={`w-full flex items-center justify-center py-4 px-6 border border-transparent rounded-2xl shadow-lg text-base font-bold text-white transition-all duration-300 transform ${
-                    isLoading
-                      ? 'bg-blue-400 cursor-not-allowed shadow-none'
-                      : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 hover:shadow-blue-500/40 hover:-translate-y-1 active:scale-[0.98]'
-                  }`}
+                  className={`w-full flex items-center justify-center py-4 px-6 border border-transparent rounded-2xl shadow-lg text-base font-bold text-white transition-all duration-300 transform ${isLoading
+                    ? 'bg-blue-400 cursor-not-allowed shadow-none'
+                    : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 hover:shadow-blue-500/40 hover:-translate-y-1 active:scale-[0.98]'
+                    }`}
                 >
                   {isLoading ? 'Analyzing Essay...' : 'Start AI Grading'}
                 </button>
@@ -297,7 +326,7 @@ export const EssayGrader: React.FC = () => {
           <div className="space-y-0 sm:space-y-6 mt-4 sm:mt-0 pb-12 sm:pb-0">
             {/* The result container needs 'print-only-content' class for CSS filtering during print */}
             <div className={`print-only-content bg-white sm:rounded-3xl shadow-none sm:shadow-lg sm:shadow-gray-200/50 border-t sm:border border-gray-100 h-full min-h-[500px] flex flex-col result-container transition-all ${!result && !isLoading ? 'justify-center items-center' : ''}`}>
-              
+
               {!result && !isLoading && (
                 <div className="text-center p-10 animate-fade-in">
                   <div className="bg-gray-50 h-28 w-28 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
@@ -314,12 +343,12 @@ export const EssayGrader: React.FC = () => {
 
               {isLoading && (
                 <div className="flex-1 flex flex-col items-center justify-center p-12 animate-fade-in">
-                   <div className="relative w-24 h-24 mb-8">
-                     <div className="absolute top-0 left-0 right-0 bottom-0 border-4 border-blue-50 rounded-full"></div>
-                     <div className="absolute top-0 left-0 right-0 bottom-0 border-4 border-blue-600 rounded-full animate-spin border-t-transparent shadow-lg shadow-blue-500/30"></div>
-                   </div>
-                   <h3 className="text-xl font-bold text-gray-800">Analyzing Essay...</h3>
-                   <p className="text-gray-500 mt-2">Connecting to Gemini 3.0</p>
+                  <div className="relative w-24 h-24 mb-8">
+                    <div className="absolute top-0 left-0 right-0 bottom-0 border-4 border-blue-50 rounded-full"></div>
+                    <div className="absolute top-0 left-0 right-0 bottom-0 border-4 border-blue-600 rounded-full animate-spin border-t-transparent shadow-lg shadow-blue-500/30"></div>
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-800">Analyzing Essay...</h3>
+                  <p className="text-gray-500 mt-2">Connecting to Gemini 3.0</p>
                 </div>
               )}
 
@@ -335,16 +364,16 @@ export const EssayGrader: React.FC = () => {
                       Grading Complete
                     </h3>
                     <div className="flex space-x-3">
-                      <button 
+                      <button
                         onClick={handleDownloadMD}
                         className="text-xs font-bold bg-white text-blue-600 px-4 py-2 rounded-xl border border-blue-100 hover:bg-blue-50 hover:border-blue-200 shadow-sm transition-all flex items-center"
                       >
-                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                          </svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
                         Save .md
                       </button>
-                      <button 
+                      <button
                         onClick={() => window.print()}
                         className="text-xs font-bold bg-white text-green-600 px-4 py-2 rounded-xl border border-green-100 hover:bg-green-50 hover:border-green-200 shadow-sm transition-all flex items-center"
                       >
@@ -365,6 +394,46 @@ export const EssayGrader: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {/* Transcription Floating Button */}
+      {transcription && (
+        <>
+          <button
+            onClick={() => setShowTranscription(!showTranscription)}
+            className="fixed bottom-8 right-8 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white p-4 rounded-full shadow-2xl hover:shadow-amber-500/50 transform hover:scale-110 active:scale-95 transition-all duration-300 z-30 no-print"
+            title="View Transcription"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+          </button>
+
+          {/* Transcription Modal */}
+          {showTranscription && (
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-40 animate-fade-in no-print">
+              <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col animate-slide-up">
+                <div className="flex justify-between items-start mb-6">
+                  <div>
+                    <h3 className="text-2xl font-bold text-gray-800">Original Text Transcription</h3>
+                    <p className="text-sm text-gray-500 mt-1">Transcribed from uploaded images</p>
+                  </div>
+                  <button
+                    onClick={() => setShowTranscription(false)}
+                    className="text-gray-400 hover:text-gray-600 transition-colors"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto bg-gray-50 rounded-xl p-6 border border-gray-200">
+                  <pre className="whitespace-pre-wrap text-gray-700 font-mono text-sm leading-relaxed">{transcription}</pre>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 };

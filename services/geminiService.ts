@@ -1,5 +1,6 @@
 import { EssayType, InputMethod, EssaySubmission } from '../types';
 import { getPromptForType } from '../constants';
+import { api } from './api';
 
 // Helper to convert File to Base64
 const fileToGenerativePart = async (file: File): Promise<string> => {
@@ -7,7 +8,6 @@ const fileToGenerativePart = async (file: File): Promise<string> => {
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64String = reader.result as string;
-      // Remove data url prefix (e.g. "data:image/jpeg;base64,")
       const base64Data = base64String.split(',')[1];
       resolve(base64Data);
     };
@@ -16,9 +16,13 @@ const fileToGenerativePart = async (file: File): Promise<string> => {
   });
 };
 
-export const gradeEssay = async (submission: EssaySubmission): Promise<string> => {
+export const gradeEssay = async (submission: EssaySubmission): Promise<{ feedback: string; transcription?: string }> => {
   let promptTemplate = getPromptForType(submission.type);
   let finalContents: any = [];
+  let meta: any = {
+    topic: submission.questionText || 'Essay Grading',
+    isImage: submission.method === InputMethod.IMAGE
+  };
 
   if (submission.method === InputMethod.TEXT) {
     // Text based submission
@@ -27,20 +31,24 @@ export const gradeEssay = async (submission: EssaySubmission): Promise<string> =
       .replace('{{CONTENT}}', submission.essayContent);
 
     finalContents = [{ parts: [{ text: filledPrompt }] }];
+    meta.originalContent = submission.essayContent;
 
   } else {
-    // Image based submission
-    // We need to instruct the model to first Transcribe then Grade
+    // Image based submission - request transcription
     const instructions = `
-      Please analyze the attached images. 
-      The first set of images provided are the Question/Prompt/Background Info.
-      The subsequent images are the Student's Essay.
-      
-      First, internally identify and transcribe the text from the images.
-      Then, strictly follow the grading instructions below based on the transcribed text:
-      
-      ${promptTemplate.replace('{{QUESTION}}', '[See Question Images]').replace('{{CONTENT}}', '[See Essay Images]')}
-    `;
+Please analyze the attached images carefully.
+
+IMPORTANT: First, transcribe ALL text from the images. Output the transcription in this exact format:
+<<<TRANSCRIPTION>>>
+[Put all transcribed text here, preserving structure and layout]
+<<<END_TRANSCRIPTION>>>
+
+After the transcription section, provide your grading following these instructions:
+
+${promptTemplate.replace('{{QUESTION}}', '[See Question Images]').replace('{{CONTENT}}', '[See Essay Images]')}
+
+Remember to include the <<<TRANSCRIPTION>>> section first, then your grading analysis.
+    `.trim();
 
     const parts: any[] = [{ text: instructions }];
 
@@ -74,34 +82,36 @@ export const gradeEssay = async (submission: EssaySubmission): Promise<string> =
   }
 
   try {
-    const response = await fetch('/api/grade', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents: finalContents,
-        generationConfig: {
-          maxOutputTokens: 4096,
-          thinkingConfig: { thinkingBudget: 1024 } // Optional, might be ignored by some models
-        }
-      })
-    });
+    const payload = {
+      contents: finalContents,
+      generationConfig: {
+        maxOutputTokens: 4096,
+        temperature: 0.7
+      }
+    };
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || `Server Error: ${response.status}`);
+    const data = await api.gradeEssay(payload, meta);
+
+    // Extract text from Gemini response
+    let feedbackText = '';
+    if (data.candidates && data.candidates.length > 0 &&
+      data.candidates[0].content && data.candidates[0].content.parts) {
+      feedbackText = data.candidates[0].content.parts.map((p: any) => p.text || '').join('');
     }
 
-    const data = await response.json();
+    // Extract transcription if present
+    const transcriptionMatch = feedbackText.match(/<<<TRANSCRIPTION>>>([\s\S]*?)<<<END_TRANSCRIPTION>>>/);
+    let transcription = undefined;
 
-    // Extract text from Gemini response structure
-    // structure: { candidates: [ { content: { parts: [ { text: "..." } ] } } ] }
-    if (data.candidates && data.candidates.length > 0 && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts.length > 0) {
-      return data.candidates[0].content.parts[0].text;
-    } else {
-      return "No response generated from AI.";
+    if (transcriptionMatch) {
+      transcription = transcriptionMatch[1].trim();
+      feedbackText = feedbackText.replace(/<<<TRANSCRIPTION>>>[\s\S]*?<<<END_TRANSCRIPTION>>>/, '').trim();
     }
+
+    return {
+      feedback: feedbackText || "No response generated from AI.",
+      transcription
+    };
 
   } catch (error: any) {
     console.error("Grading API Error:", error);
