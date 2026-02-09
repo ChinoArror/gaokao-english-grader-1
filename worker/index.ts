@@ -3,8 +3,6 @@ import { Fetcher } from "@cloudflare/workers-types";
 export interface Env {
     ASSETS: Fetcher;
     API_KEY?: string;
-    API_DOMAIN?: string;
-    MODEL_NAME?: string;
 }
 
 export default {
@@ -26,9 +24,13 @@ export default {
         if (request.method === "POST" && url.pathname === "/api/grade") {
             try {
                 const body: any = await request.json();
-
                 const apiKey = env.API_KEY || "";
-                const apiDomain = env.API_DOMAIN || "generativelanguage.googleapis.com";
+
+                // Define model explicitly as requested
+                const modelName = "gemini-3-pro-preview";
+
+                // Construct standard Google API URL
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
                 if (!apiKey) {
                     return new Response(JSON.stringify({ error: "Configuration Error: API_KEY is missing in worker environment." }), {
@@ -37,34 +39,19 @@ export default {
                     });
                 }
 
-                let apiUrl = "";
-                const modelName = body.model || env.MODEL_NAME || 'gemini-2.0-flash-exp';
-
-                if (apiDomain.startsWith("http")) {
-                    apiUrl = `${apiDomain}/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-                } else {
-                    apiUrl = `https://${apiDomain}/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-                }
-
                 const response = await fetch(apiUrl, {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json"
                     },
-                    body: JSON.stringify(body.payload || body)
+                    body: JSON.stringify(body)
                 });
 
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    // Pass through the upstream status
-                    return new Response(JSON.stringify({ error: `Gemini API Error: ${response.status} ${response.statusText}`, details: errorText }), {
-                        status: response.status,
-                        headers: { "Content-Type": "application/json" }
-                    });
-                }
+                // Pass through the upstream status and body
+                const responseData = await response.text();
 
-                const data = await response.json();
-                return new Response(JSON.stringify(data), {
+                return new Response(responseData, {
+                    status: response.status,
                     headers: { "Content-Type": "application/json" }
                 });
 
@@ -77,7 +64,6 @@ export default {
         }
 
         // Static Assets Fallback
-        // If the request didn't match the API, serve static assets.
         try {
             return await env.ASSETS.fetch(request);
         } catch (e) {
