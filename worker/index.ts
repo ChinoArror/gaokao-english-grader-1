@@ -165,7 +165,7 @@ export default {
                 }
 
                 const users = await env.DB.prepare(
-                    'SELECT id, username, created_at FROM users ORDER BY created_at DESC'
+                    'SELECT id, username, created_at FROM users WHERE id != 0 ORDER BY created_at DESC'
                 ).all();
 
                 return jsonResponse({ users: users.results });
