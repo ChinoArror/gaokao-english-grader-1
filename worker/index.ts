@@ -26,7 +26,7 @@ async function hashPassword(password: string): Promise<string> {
 }
 
 // Verify session token
-async function verifySession(db: D1Database, token: string | null): Promise<{ valid: boolean; userId?: number; role?: string; username?: string }> {
+async function verifySession(db: D1Database, token: string | null): Promise<{ valid: boolean; userId?: number; role?: string; username?: string; error?: string }> {
     if (!token) return { valid: false };
 
     const now = Math.floor(Date.now() / 1000);
@@ -38,9 +38,10 @@ async function verifySession(db: D1Database, token: string | null): Promise<{ va
 
     let username = 'admin';
     if (session.role === 'user' && session.user_id) {
-        const user = await db.prepare('SELECT username FROM users WHERE id = ?')
+        const user = await db.prepare('SELECT username, status FROM users WHERE id = ?')
             .bind(session.user_id).first();
         username = user?.username as string || '';
+        if (user?.status === 'suspended') return { valid: false, error: 'suspended' };
     }
 
     return {
@@ -107,8 +108,12 @@ export default {
                 // Check user in database
                 const hashedPassword = await hashPassword(password);
                 const user = await env.DB.prepare(
-                    'SELECT id, username FROM users WHERE username = ? AND password = ?'
+                    'SELECT id, username, status FROM users WHERE username = ? AND password = ?'
                 ).bind(username, hashedPassword).first();
+
+                if (user && user.status === 'suspended') {
+                    return jsonResponse({ success: false, error: 'Account suspended' }, 403);
+                }
 
                 if (user) {
                     const token = generateToken();
@@ -144,6 +149,13 @@ export default {
             if (url.pathname === '/api/auth/verify' && request.method === 'GET') {
                 const token = getAuthToken(request);
                 const session = await verifySession(env.DB, token);
+
+                if (session.error === 'suspended') {
+                    // If suspended, invalidate session immediately
+                    if (token) await env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run();
+                    return jsonResponse({ valid: false, error: 'Account suspended' }, 403);
+                }
+
                 if (session.valid) {
                     return jsonResponse({
                         valid: true,
@@ -165,7 +177,7 @@ export default {
                 }
 
                 const users = await env.DB.prepare(
-                    'SELECT id, username, created_at FROM users WHERE id != 0 ORDER BY created_at DESC'
+                    'SELECT id, username, created_at, status FROM users WHERE id != 0 ORDER BY created_at DESC'
                 ).all();
 
                 return jsonResponse({ users: users.results });
@@ -192,6 +204,29 @@ export default {
                 } catch (e: any) {
                     return jsonResponse({ error: 'Username already exists' }, 400);
                 }
+            }
+
+            // Admin - User Status Toggle
+            if (url.pathname.startsWith('/api/admin/users/') && url.pathname.endsWith('/status') && request.method === 'PUT') {
+                const token = getAuthToken(request);
+                const session = await verifySession(env.DB, token);
+
+                if (!session.valid || session.role !== 'admin') {
+                    return jsonResponse({ error: 'Unauthorized' }, 403);
+                }
+
+                const parts = url.pathname.split('/');
+                const userId = parts[4]; // /api/admin/users/:id/status
+                const { status } = await request.json() as { status: string };
+
+                await env.DB.prepare('UPDATE users SET status = ? WHERE id = ?').bind(status, userId).run();
+
+                // If suspending, kill all active sessions for this user
+                if (status === 'suspended') {
+                    await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run();
+                }
+
+                return jsonResponse({ success: true });
             }
 
             if (url.pathname.startsWith('/api/admin/users/') && request.method === 'PUT') {
@@ -231,6 +266,67 @@ export default {
                 await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
 
                 return jsonResponse({ success: true });
+            }
+
+
+
+            // Admin - Statistics
+            if (url.pathname === '/api/admin/stats' && request.method === 'GET') {
+                const token = getAuthToken(request);
+                const session = await verifySession(env.DB, token);
+
+                if (!session.valid || session.role !== 'admin') {
+                    return jsonResponse({ error: 'Unauthorized' }, 403);
+                }
+
+                const urlParams = new URLSearchParams(url.search);
+                const period = urlParams.get('period') || 'daily'; // 'daily' or 'monthly'
+                const userFilter = urlParams.get('userId');
+
+                let timeFormat = '%Y-%m-%d';
+                if (period === 'monthly') timeFormat = '%Y-%m';
+
+                let query = `
+                    SELECT 
+                        strftime('${timeFormat}', datetime(timestamp, 'unixepoch')) as date,
+                        user_id,
+                        COUNT(CASE WHEN action_type = 'grade_success' THEN 1 END) as success_count,
+                        COUNT(CASE WHEN action_type = 'grade_error' THEN 1 END) as error_count,
+                        CAST(SUM(tokens) AS FLOAT) / 1000.0 as total_tokens
+                    FROM usage_logs
+                    WHERE 1=1
+                `;
+
+                const params: any[] = [];
+                if (userFilter) {
+                    query += ' AND user_id = ?';
+                    params.push(userFilter);
+                }
+
+                query += ` GROUP BY date`;
+                // if (!userFilter) query += `, user_id`; // Always group by date only to merge all users data per day
+
+                query += ` ORDER BY date DESC LIMIT 100`;
+
+                const stats = await env.DB.prepare(query).bind(...params).all();
+
+                // Enrich with usernames
+                const userIds = [...new Set(stats.results.map((r: any) => r.user_id).filter((id: any) => id))];
+                let userMap: Record<number, string> = {};
+
+                if (userIds.length > 0) {
+                    const users = await env.DB.prepare(`SELECT id, username FROM users WHERE id IN (${userIds.join(',')})`).all();
+                    users.results.forEach((u: any) => userMap[u.id] = u.username);
+                    // Add admin system user manually if needed
+                    userMap[0] = 'Admin System';
+                }
+
+                const enrichedStats = stats.results.map((r: any) => ({
+                    ...r,
+                    username: userMap[r.user_id as number] || 'Unknown'
+                }));
+
+                return jsonResponse({ stats: enrichedStats });
             }
 
             // History endpoints
@@ -314,6 +410,12 @@ export default {
 
                 if (!response.ok) {
                     const errorText = await response.text();
+                    // Log error
+                    const now = Math.floor(Date.now() / 1000);
+                    await env.DB.prepare(
+                        'INSERT INTO usage_logs (user_id, timestamp, action_type, error_details) VALUES (?, ?, ?, ?)'
+                    ).bind(session.userId || 0, now, 'grade_error', `API Error ${response.status}: ${errorText.substring(0, 200)}`).run();
+
                     return jsonResponse({
                         error: `Gemini API Error: ${response.status}`,
                         details: errorText
@@ -349,6 +451,16 @@ export default {
                     feedbackText
                 ).run();
 
+                // Log success usage
+                // Estimate tokens (very rough approximation: 4 chars ~ 1 token)
+                const inputLength = JSON.stringify(payload).length;
+                const outputLength = feedbackText.length;
+                const estimatedTokens = Math.ceil((inputLength + outputLength) / 4);
+
+                await env.DB.prepare(
+                    'INSERT INTO usage_logs (user_id, timestamp, action_type, tokens) VALUES (?, ?, ?, ?)'
+                ).bind(session.userId || 0, now, 'grade_success', estimatedTokens).run();
+
                 return jsonResponse({
                     ...data,
                     transcription: transcribedContent
@@ -356,7 +468,15 @@ export default {
             }
 
             // Static assets fallback
-            return await env.ASSETS.fetch(request);
+            // Static assets fallback
+            let response = await env.ASSETS.fetch(request);
+
+            if (response.status === 404 && !url.pathname.startsWith('/api/')) {
+                // SPA fallback
+                response = await env.ASSETS.fetch(new Request(new URL('/index.html', request.url), request));
+            }
+
+            return response;
 
         } catch (e: any) {
             console.error('Worker error:', e);

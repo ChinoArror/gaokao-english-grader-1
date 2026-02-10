@@ -1,6 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
-import { User } from '../types';
+import { User, UsageStat } from '../types';
+import {
+    BarChart,
+    Bar,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    Legend,
+    ResponsiveContainer,
+    Line,
+    ComposedChart
+} from 'recharts';
 
 interface AdminPageProps {
     onLogout: () => void;
@@ -16,9 +28,31 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
     const [newPassword, setNewPassword] = useState('');
     const [error, setError] = useState('');
 
+    // Stats State
+    const [stats, setStats] = useState<UsageStat[]>([]);
+    const [statsPeriod, setStatsPeriod] = useState<'daily' | 'monthly'>('daily');
+    const [statsLoading, setStatsLoading] = useState(true);
+    const [selectedUserId, setSelectedUserId] = useState<number | ''>('');
+
     useEffect(() => {
         loadUsers();
     }, []);
+
+    useEffect(() => {
+        loadStats();
+    }, [statsPeriod, selectedUserId]);
+
+    const loadStats = async () => {
+        setStatsLoading(true);
+        try {
+            const data = await api.getStats(statsPeriod, selectedUserId === '' ? undefined : Number(selectedUserId));
+            setStats(data);
+        } catch (err) {
+            console.error('Failed to load stats:', err);
+        } finally {
+            setStatsLoading(false);
+        }
+    };
 
     const loadUsers = async () => {
         try {
@@ -83,6 +117,23 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
         }
     };
 
+    const handleToggleStatus = async (user: User) => {
+        const newStatus = user.status === 'suspended' ? 'active' : 'suspended';
+        const action = newStatus === 'active' ? 'activate' : 'suspend'; // continue/pause
+
+        if (!confirm(`Are you sure you want to ${action} this user?`)) {
+            return;
+        }
+
+        try {
+            await api.toggleUserStatus(user.id, newStatus);
+            loadUsers();
+        } catch (err) {
+            console.error(`Failed to ${action} user:`, err);
+            setError(`Failed to ${action} user`);
+        }
+    };
+
     const openEditModal = (user: User) => {
         setEditingUser(user);
         setNewUsername(user.username);
@@ -122,6 +173,87 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
                     </div>
                 </div>
 
+                {/* Statistics Section */}
+                <div className="bg-white/80 backdrop-blur-lg rounded-3xl shadow-2xl p-6 mb-8 border border-white/50 animate-slide-up">
+                    <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
+                        <div className="flex flex-col">
+                            <h2 className="text-2xl font-bold text-gray-800">Usage Statistics</h2>
+                            <p className="text-sm text-gray-400 mt-1">Tokens in units of 1,000 (k)</p>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 items-center">
+                            <select
+                                value={selectedUserId}
+                                onChange={(e) => setSelectedUserId(e.target.value ? Number(e.target.value) : '')}
+                                className="px-4 py-2 rounded-xl border border-gray-200 bg-gray-50/50 text-sm font-medium text-gray-700 outline-none focus:ring-2 focus:ring-indigo-100 transition-all hover:bg-white cursor-pointer"
+                            >
+                                <option value="">All Users</option>
+                                {users.map(u => (
+                                    <option key={u.id} value={u.id}>{u.username}</option>
+                                ))}
+                            </select>
+
+                            <div className="bg-gray-100 p-1 rounded-xl flex gap-1">
+                                <button
+                                    onClick={() => setStatsPeriod('daily')}
+                                    className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${statsPeriod === 'daily' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                >
+                                    Daily
+                                </button>
+                                <button
+                                    onClick={() => setStatsPeriod('monthly')}
+                                    className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${statsPeriod === 'monthly' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                >
+                                    Monthly
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {statsLoading ? (
+                        <div className="h-80 flex items-center justify-center">
+                            <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-indigo-600 border-t-transparent"></div>
+                        </div>
+                    ) : (
+                        <div className="w-full" style={{ height: 400 }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                                <ComposedChart data={[...stats].reverse()} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e7ff" vertical={false} />
+                                    <XAxis
+                                        dataKey="date"
+                                        tick={{ fill: '#64748b', fontSize: 12 }}
+                                        axisLine={false}
+                                        tickLine={false}
+                                    />
+                                    <YAxis
+                                        yAxisId="left"
+                                        tick={{ fill: '#64748b', fontSize: 12 }}
+                                        axisLine={false}
+                                        tickLine={false}
+                                        label={{ value: 'Requests', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: '#64748b' } }}
+                                    />
+                                    <YAxis
+                                        yAxisId="right"
+                                        orientation="right"
+                                        tick={{ fill: '#64748b', fontSize: 12 }}
+                                        axisLine={false}
+                                        tickLine={false}
+                                        label={{ value: 'Tokens (k)', angle: 90, position: 'insideRight', style: { textAnchor: 'middle', fill: '#64748b' } }}
+                                    />
+                                    <Tooltip
+                                        contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.9)', borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
+                                        cursor={{ fill: '#f1f5f9' }}
+                                    />
+                                    <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                                    <Bar yAxisId="left" dataKey="success_count" name="Successful Grades" stackId="a" fill="#34d399" radius={[0, 0, 4, 4]} barSize={32} />
+                                    <Bar yAxisId="left" dataKey="error_count" name="Errors" stackId="a" fill="#f87171" radius={[4, 4, 0, 0]} barSize={32} />
+                                    <Line yAxisId="right" type="monotone" dataKey="total_tokens" name="Tokens Used" stroke="#818cf8" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+                                </ComposedChart>
+                            </ResponsiveContainer>
+                        </div>
+                    )}
+                </div>
+
                 {/* User List */}
                 <div className="bg-white/80 backdrop-blur-lg rounded-3xl shadow-2xl p-6 border border-white/50">
                     <div className="flex justify-between items-center mb-6">
@@ -157,6 +289,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
                                 <thead>
                                     <tr className="border-b border-gray-200">
                                         <th className="text-left py-4 px-4 font-semibold text-gray-700">Username</th>
+                                        <th className="text-left py-4 px-4 font-semibold text-gray-700">Status</th>
                                         <th className="text-left py-4 px-4 font-semibold text-gray-700">Created</th>
                                         <th className="text-right py-4 px-4 font-semibold text-gray-700">Actions</th>
                                     </tr>
@@ -165,6 +298,12 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
                                     {users.map((user) => (
                                         <tr key={user.id} className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
                                             <td className="py-4 px-4 font-medium text-gray-800">{user.username}</td>
+                                            <td className="py-4 px-4">
+                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${user.status === 'suspended' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
+                                                    }`}>
+                                                    {user.status === 'suspended' ? 'Suspended' : 'Active'}
+                                                </span>
+                                            </td>
                                             <td className="py-4 px-4 text-gray-600">
                                                 {new Date(user.created_at * 1000).toLocaleDateString()}
                                             </td>
@@ -175,6 +314,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
                                                         className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200"
                                                     >
                                                         Edit
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleToggleStatus(user)}
+                                                        className={`px-4 py-2 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200 ${user.status === 'suspended'
+                                                            ? 'bg-green-500 hover:bg-green-600' // Continue
+                                                            : 'bg-orange-500 hover:bg-orange-600' // Pause
+                                                            }`}
+                                                    >
+                                                        {user.status === 'suspended' ? 'Continue' : 'Pause'}
                                                     </button>
                                                     <button
                                                         onClick={() => handleDeleteUser(user.id)}

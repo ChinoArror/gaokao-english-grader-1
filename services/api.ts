@@ -1,4 +1,4 @@
-import { User, HistoryRecord, LoginResponse } from '../types';
+import { User, HistoryRecord, LoginResponse, UsageStat } from '../types';
 
 const API_BASE = '/api';
 
@@ -92,6 +92,24 @@ export const api = {
             method: 'DELETE'
         });
         return await response.json();
+    },
+
+    async toggleUserStatus(userId: number, status: 'active' | 'suspended'): Promise<{ success: boolean }> {
+        const response = await authFetch(`${API_BASE}/admin/users/${userId}/status`, {
+            method: 'PUT',
+            body: JSON.stringify({ status })
+        });
+        return await response.json();
+    },
+
+    async getStats(period: 'daily' | 'monthly', userId?: number): Promise<UsageStat[]> {
+        let url = `${API_BASE}/admin/stats?period=${period}`;
+        if (userId) {
+            url += `&userId=${userId}`;
+        }
+        const response = await authFetch(url);
+        const data = await response.json();
+        return data.stats || [];
     },
 
     // History

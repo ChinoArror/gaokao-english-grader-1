@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
+import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { LoginPage } from './components/LoginPage';
 import { EssayGrader } from './components/EssayGrader';
 import { AdminPage } from './components/AdminPage';
 import { HistoryPage } from './components/HistoryPage';
 import { api } from './services/api';
 
-type Page = 'login' | 'grader' | 'admin' | 'history';
-
 function App() {
-  const [currentPage, setCurrentPage] = useState<Page>('login');
   const [userRole, setUserRole] = useState<'admin' | 'user' | null>(null);
   const [username, setUsername] = useState<string>('');
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     // Check if user has valid session
@@ -19,31 +19,35 @@ function App() {
       const session = await api.verifySession();
       if (session.valid && session.role && session.username) {
         setUserRole(session.role as 'admin' | 'user');
-        setUsername(session.username);
-        setCurrentPage(session.role === 'admin' ? 'admin' : 'grader');
+        setUsername(session.username); // Keep username in state if needed
+
+        // Redirect from login/root to appropriate dashboard
+        if (location.pathname === '/login' || location.pathname === '/') {
+          navigate(session.role === 'admin' ? '/admin' : '/grader');
+        }
+      } else {
+        // Redirect to login if not valid and trying to access protected routes
+        if (location.pathname !== '/login') {
+          navigate('/login');
+        }
       }
       setLoading(false);
     };
 
     checkSession();
-  }, []);
+  }, [navigate]); // Only run on mount (and nav change if needed, but here mainly mount)
 
   const handleLoginSuccess = (role: string, username: string) => {
     setUserRole(role as 'admin' | 'user');
     setUsername(username);
-
-    if (role === 'admin') {
-      setCurrentPage('admin');
-    } else {
-      setCurrentPage('grader');
-    }
+    navigate(role === 'admin' ? '/admin' : '/grader');
   };
 
   const handleLogout = async () => {
     await api.logout();
     setUserRole(null);
     setUsername('');
-    setCurrentPage('login');
+    navigate('/login');
   };
 
   if (loading) {
@@ -57,29 +61,36 @@ function App() {
     );
   }
 
-  if (currentPage === 'login') {
-    return <LoginPage onLoginSuccess={handleLoginSuccess} />;
-  }
-
-  if (currentPage === 'admin') {
-    return (
-      <AdminPage
-        onLogout={handleLogout}
-        onNavigateToGrader={() => setCurrentPage('grader')}
-      />
-    );
-  }
-
-  if (currentPage === 'history') {
-    return <HistoryPage onBack={() => setCurrentPage('grader')} />;
-  }
-
-  // Default: Grader page
   return (
-    <EssayGrader
-      onNavigateToHistory={() => setCurrentPage('history')}
-      onLogout={handleLogout}
-    />
+    <Routes>
+      <Route path="/login" element={<LoginPage onLoginSuccess={handleLoginSuccess} />} />
+
+      <Route path="/grader" element={
+        userRole ? (
+          <EssayGrader
+            onNavigateToHistory={() => navigate('/history')}
+            onLogout={handleLogout}
+          />
+        ) : <Navigate to="/login" />
+      } />
+
+      <Route path="/admin" element={
+        userRole === 'admin' ? (
+          <AdminPage
+            onLogout={handleLogout}
+            onNavigateToGrader={() => navigate('/grader')}
+          />
+        ) : <Navigate to="/login" />
+      } />
+
+      <Route path="/history" element={
+        userRole ? (
+          <HistoryPage onBack={() => navigate('/grader')} />
+        ) : <Navigate to="/login" />
+      } />
+
+      <Route path="*" element={<Navigate to="/login" />} />
+    </Routes>
   );
 }
 

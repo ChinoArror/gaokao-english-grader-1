@@ -8,7 +8,18 @@ CREATE TABLE users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE NOT NULL,
   password TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  status TEXT DEFAULT 'active'
+);
+
+-- Usage statistics logs
+CREATE TABLE usage_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  timestamp INTEGER NOT NULL,
+  action_type TEXT NOT NULL,
+  tokens INTEGER DEFAULT 0,
+  error_details TEXT
 );
 
 -- Essay grading history

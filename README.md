@@ -1,12 +1,15 @@
 # Gaokao English Grader - AI Essay Grading System
 
-A comprehensive AI-powered English essay grading system designed for Gaokao (高考) exams, featuring advanced user management, grading history, and transcription capabilities.
+A comprehensive AI-powered English essay grading system designed for Gaokao (高考) exams, featuring advanced user management, grading history, detailed usage statistics, and transcription capabilities.
 
 ## 🚀 Features
 
 ### Authentication & User Management
 - **Multi-user Support**: Separate admin and user roles with secure authentication
-- **Admin Dashboard**: Manage users - create, update, and delete user accounts
+- **Admin Dashboard**: 
+  - Manage users - create, update, and delete accounts
+  - **User Suspension**: Pause and resume user access instantly (forces logout for suspended users)
+  - **Usage Statistics**: Visualize system usage with interactive charts (Daily/Monthly views)
 - **Session Management**: Secure token-based authentication with automatic session persistence
 - **Password Protection**: SHA-256 hashed passwords for user accounts
 
@@ -29,6 +32,7 @@ A comprehensive AI-powered English essay grading system designed for Gaokao (高
 - **User-Specific Access**: Users see only their own records; admins see all
 
 ### User Experience
+- **SPA Routing**: Fast, client-side routing for seamless navigation
 - **Responsive Design**: Optimized for mobile and desktop devices
 - **Modern UI**: Glass-morphism design with smooth animations and transitions
 - **Real-time Feedback**: Loading states and error handling
@@ -38,6 +42,8 @@ A comprehensive AI-powered English essay grading system designed for Gaokao (高
 
 ### Frontend
 - **React 18** with TypeScript
+- **React Router DOM** for client-side routing
+- **Recharts** for data visualization
 - **Tailwind CSS** for styling
 - **Marked.js** for Markdown rendering
 - **Vite** for build tooling
@@ -96,13 +102,15 @@ npx wrangler deploy
 ### For Administrators
 
 1. **Login**: Use admin credentials (default: admin/admin123)
-2. **User Management**:
-   - View all registered users
-   - Add new users with username and password
-   - Edit existing user credentials
-   - Delete user accounts
-3. **Access Grader**: Navigate to grader from admin dashboard
-4. **View All History**: See grading records from all users
+2. **Dashboard Overview**:
+   - **Usage Statistics**: View bar/line charts for request counts and token usage (Daily/Monthly). Filter by specific user or view aggregate data.
+3. **User Management**:
+   - View all registered users and their status (Active/Suspended)
+   - Add new users
+   - **Pause/Continue Users**: Suspend access for specific users (clears their active sessions)
+   - Edit credentials or delete accounts
+4. **Access Grader**: Navigate to grader from admin dashboard
+5. **View All History**: See grading records from all users
 
 ### For Users
 
@@ -127,7 +135,16 @@ npx wrangler deploy
 - `id`: Primary key
 - `username`: Unique username
 - `password`: SHA-256 hashed password
+- `status`: 'active' or 'suspended'
 - `created_at`: Unix timestamp
+
+### Usage Logs (New)
+- `id`: Primary key
+- `user_id`: Foreign key to users
+- `timestamp`: Unix timestamp
+- `action_type`: 'grade_success' or 'grade_error'
+- `tokens`: Token usage count (integer)
+- `error_details`: Error message if applicable
 
 ### History Table
 - `id`: Primary key
@@ -164,7 +181,7 @@ The application maintains a consistent design language throughout:
 ## 🔄 API Endpoints
 
 ### Authentication
-- `POST /api/auth/login` - User/admin login
+- `POST /api/auth/login` - User/admin login (checks user status)
 - `POST /api/auth/logout` - Session logout
 - `GET /api/auth/verify` - Verify session token
 
@@ -172,14 +189,16 @@ The application maintains a consistent design language throughout:
 - `GET /api/admin/users` - List all users
 - `POST /api/admin/users` - Create new user
 - `PUT /api/admin/users/:id` - Update user
+- `PUT /api/admin/users/:id/status` - Toggle user status (Active/Suspended)
 - `DELETE /api/admin/users/:id` - Delete user
+- `GET /api/admin/stats` - Get usage statistics
 
 ### History
 - `GET /api/history` - Get user's grading history
 - `DELETE /api/history/:id` - Delete history record
 
 ### Grading
-- `POST /api/grade` - Submit essay for grading (saves to history)
+- `POST /api/grade` - Submit essay for grading (saves to history & logs usage)
 
 ## 📝 Environment Variables
 

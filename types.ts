@@ -38,6 +38,16 @@ export interface User {
   username: string;
   password?: string;
   created_at: number;
+  status: 'active' | 'suspended';
+}
+
+export interface UsageStat {
+  date: string;
+  user_id: number;
+  username: string;
+  success_count: number;
+  error_count: number;
+  total_tokens: number;
 }
 
 export interface HistoryRecord {
