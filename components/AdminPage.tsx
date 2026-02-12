@@ -27,6 +27,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
     const [newUsername, setNewUsername] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [error, setError] = useState('');
+    const [selectedUserIds, setSelectedUserIds] = useState<Set<number>>(new Set());
 
     // Stats State
     const [stats, setStats] = useState<UsageStat[]>([]);
@@ -131,6 +132,49 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
         } catch (err) {
             console.error(`Failed to ${action} user:`, err);
             setError(`Failed to ${action} user`);
+        }
+    };
+
+    const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.checked) {
+            setSelectedUserIds(new Set(users.map(u => u.id)));
+        } else {
+            setSelectedUserIds(new Set());
+        }
+    };
+
+    const handleSelectUser = (id: number) => {
+        const newSelected = new Set(selectedUserIds);
+        if (newSelected.has(id)) {
+            newSelected.delete(id);
+        } else {
+            newSelected.add(id);
+        }
+        setSelectedUserIds(newSelected);
+    };
+
+    const handleBulkAction = async (action: 'delete' | 'activate' | 'suspend') => {
+        const count = selectedUserIds.size;
+        if (count === 0) return;
+
+        const confirmMessage = action === 'delete' 
+            ? `Are you sure you want to delete ${count} users? This action cannot be undone.`
+            : `Are you sure you want to ${action} ${count} users?`;
+
+        if (!confirm(confirmMessage)) return;
+
+        try {
+            const promises = Array.from(selectedUserIds).map(id => {
+                if (action === 'delete') return api.deleteUser(id);
+                return api.toggleUserStatus(id, action === 'activate' ? 'active' : 'suspended');
+            });
+            
+            await Promise.all(promises);
+            setSelectedUserIds(new Set());
+            loadUsers();
+        } catch (err) {
+            console.error(`Bulk ${action} failed:`, err);
+            setError(`Failed to perform bulk ${action}`);
         }
     };
 
@@ -256,19 +300,56 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
 
                 {/* User List */}
                 <div className="bg-white/80 backdrop-blur-lg rounded-3xl shadow-2xl p-6 border border-white/50">
-                    <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-2xl font-bold text-gray-800">Users</h2>
-                        <button
-                            onClick={() => setShowAddModal(true)}
-                            className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-semibold rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-blue-600/40 transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-300"
-                        >
-                            <span className="flex items-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                </svg>
-                                Add User
-                            </span>
-                        </button>
+                    <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4 h-auto md:h-14">
+                        {selectedUserIds.size > 0 ? (
+                            <div className="flex flex-col sm:flex-row items-center justify-between w-full animate-fade-in bg-indigo-50/50 p-2 rounded-xl border border-indigo-100 gap-3 sm:gap-0">
+                                <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-4 px-2 w-full sm:w-auto">
+                                    <div className="flex items-center justify-between w-full sm:w-auto">
+                                        <span className="font-bold text-indigo-900 bg-indigo-100 px-3 py-1 rounded-lg whitespace-nowrap text-sm">
+                                        {selectedUserIds.size} Selected
+                                    </span>
+                                        <button onClick={() => setSelectedUserIds(new Set())} className="sm:hidden text-gray-500 hover:text-gray-700 font-medium text-sm">Cancel</button>
+                                    </div>
+                                    <div className="hidden sm:block h-6 w-px bg-indigo-200"></div>
+                                    <div className="grid grid-cols-3 gap-2 w-full sm:flex sm:w-auto">
+                                        <button
+                                            onClick={() => handleBulkAction('activate')}
+                                            className="px-2 sm:px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white text-xs sm:text-sm font-semibold rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200 flex justify-center items-center"
+                                        >
+                                            Activate
+                                        </button>
+                                        <button
+                                            onClick={() => handleBulkAction('suspend')}
+                                            className="px-2 sm:px-4 py-2 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white text-xs sm:text-sm font-semibold rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200 flex justify-center items-center"
+                                        >
+                                            Suspend
+                                        </button>
+                                        <button
+                                            onClick={() => handleBulkAction('delete')}
+                                            className="px-2 sm:px-4 py-2 bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white text-xs sm:text-sm font-semibold rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200 flex justify-center items-center"
+                                        >
+                                            Delete
+                                        </button>
+                                    </div>
+                                </div>
+                                <button onClick={() => setSelectedUserIds(new Set())} className="hidden sm:block mr-2 text-gray-500 hover:text-gray-700 font-medium text-sm">Cancel</button>
+                            </div>
+                        ) : (
+                            <>
+                                <h2 className="text-2xl font-bold text-gray-800">Users</h2>
+                                <button
+                                    onClick={() => setShowAddModal(true)}
+                                    className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-semibold rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-blue-600/40 transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-300"
+                                >
+                                    <span className="flex items-center gap-2">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                        </svg>
+                                        Add User
+                                    </span>
+                                </button>
+                            </>
+                        )}
                     </div>
 
                     {loading ? (
@@ -288,15 +369,31 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
                             <table className="w-full">
                                 <thead>
                                     <tr className="border-b border-gray-200">
+                                        <th className="w-12 py-4 px-4 text-left">
+                                            <input 
+                                                type="checkbox" 
+                                                className="w-5 h-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 transition-all cursor-pointer accent-indigo-600"
+                                                checked={users.length > 0 && selectedUserIds.size === users.length}
+                                                onChange={handleSelectAll}
+                                            />
+                                        </th>
                                         <th className="text-left py-4 px-4 font-semibold text-gray-700">Username</th>
                                         <th className="text-left py-4 px-4 font-semibold text-gray-700">Status</th>
-                                        <th className="text-left py-4 px-4 font-semibold text-gray-700">Created</th>
+                                        <th className="hidden sm:table-cell text-left py-4 px-4 font-semibold text-gray-700">Created</th>
                                         <th className="text-right py-4 px-4 font-semibold text-gray-700">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {users.map((user) => (
                                         <tr key={user.id} className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
+                                            <td className="py-4 px-4">
+                                                <input 
+                                                    type="checkbox" 
+                                                    className="w-5 h-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 transition-all cursor-pointer accent-indigo-600"
+                                                    checked={selectedUserIds.has(user.id)}
+                                                    onChange={() => handleSelectUser(user.id)}
+                                                />
+                                            </td>
                                             <td className="py-4 px-4 font-medium text-gray-800">{user.username}</td>
                                             <td className="py-4 px-4">
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${user.status === 'suspended' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
@@ -304,20 +401,20 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
                                                     {user.status === 'suspended' ? 'Suspended' : 'Active'}
                                                 </span>
                                             </td>
-                                            <td className="py-4 px-4 text-gray-600">
+                                            <td className="hidden sm:table-cell py-4 px-4 text-gray-600">
                                                 {new Date(user.created_at * 1000).toLocaleDateString()}
                                             </td>
                                             <td className="py-4 px-4 text-right">
                                                 <div className="flex justify-end gap-2">
                                                     <button
                                                         onClick={() => openEditModal(user)}
-                                                        className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200"
+                                                        className="px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm bg-yellow-500 hover:bg-yellow-600 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200"
                                                     >
                                                         Edit
                                                     </button>
                                                     <button
                                                         onClick={() => handleToggleStatus(user)}
-                                                        className={`px-4 py-2 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200 ${user.status === 'suspended'
+                                                        className={`px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-white font-semibold rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200 ${user.status === 'suspended'
                                                             ? 'bg-green-500 hover:bg-green-600' // Continue
                                                             : 'bg-orange-500 hover:bg-orange-600' // Pause
                                                             }`}
@@ -326,7 +423,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onLogout, onNavigateToGrad
                                                     </button>
                                                     <button
                                                         onClick={() => handleDeleteUser(user.id)}
-                                                        className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200"
+                                                        className="px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200"
                                                     >
                                                         Delete
                                                     </button>
