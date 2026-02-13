@@ -5,10 +5,12 @@ import { marked } from 'marked';
 
 interface EssayGraderProps {
   onNavigateToHistory?: () => void;
+  onNavigateToListen?: () => void;
   onLogout?: () => void;
 }
 
-export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, onLogout }) => {
+export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, onNavigateToListen, onLogout }) => {
+
   const [essayType, setEssayType] = useState<EssayType>(EssayType.PRACTICAL);
   const [inputMethod, setInputMethod] = useState<InputMethod>(InputMethod.TEXT);
   const [questionText, setQuestionText] = useState('');
@@ -118,6 +120,18 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
                 </svg>
               </button>
             )}
+            {onNavigateToListen && (
+              <button
+                onClick={onNavigateToListen}
+                title="Listening Tool"
+                className="p-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-white rounded-xl shadow-lg shadow-teal-500/30 hover:shadow-teal-600/40 transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-300"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+              </button>
+            )}
+
             {onLogout && (
               <button
                 onClick={onLogout}

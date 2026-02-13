@@ -139,5 +139,66 @@ export const api = {
         }
 
         return await response.json();
+    },
+
+    // Audio Listening
+    async uploadAudio(file: File): Promise<{ success: boolean, key: string; url: string }> {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const token = getAuthToken();
+        const headers: HeadersInit = {};
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        // Do not set Content-Type for FormData, browser sets it with boundary
+        const response = await fetch(`${API_BASE}/audio/upload`, {
+            method: 'POST',
+            body: formData,
+            headers
+        });
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.error || 'Upload failed');
+        }
+
+        return await response.json();
+    },
+
+    async segmentAudio(key: string): Promise<{ segments: any[] }> {
+        const response = await authFetch(`${API_BASE}/audio/segment`, {
+            method: 'POST',
+            body: JSON.stringify({ key })
+        });
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            const errorMessage = error.error || error.message || 'Segmentation failed';
+            const details = error.details ? ` Details: ${typeof error.details === 'object' ? JSON.stringify(error.details) : error.details}` : '';
+            throw new Error(`${errorMessage}${details}`);
+        }
+
+        return await response.json();
+    },
+
+    async getAudioFiles(): Promise<{ id: number; filename: string; file_key: string; created_at: number; segments_json: string }[]> {
+        const response = await authFetch(`${API_BASE}/audio/files`);
+        if (!response.ok) return [];
+        const data = await response.json();
+        return data.files || [];
+    },
+
+    async deleteAudio(id: number): Promise<void> {
+        const response = await authFetch(`${API_BASE}/audio/files/${id}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) {
+            throw new Error('Failed to delete audio');
+        }
     }
 };
+
+
+

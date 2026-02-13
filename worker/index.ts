@@ -1,14 +1,17 @@
-import { D1Database } from "@cloudflare/workers-types";
+import { D1Database, R2Bucket } from "@cloudflare/workers-types";
 
 export interface Env {
     ASSETS: any;
     DB: D1Database;
+    R2: R2Bucket;
     API_KEY?: string;
     API_DOMAIN?: string;
     MODEL_NAME?: string;
+    LISTEN_MODEL_NAME?: string;
     ADMIN_USERNAME?: string;
     ADMIN_PASSWORD?: string;
 }
+
 
 // Helper function to generate random token
 function generateToken(): string {
@@ -467,9 +470,241 @@ export default {
                 });
             }
 
-            // Static assets fallback
+            // Audio Upload
+            if (url.pathname === '/api/audio/upload' && request.method === 'POST') {
+                const token = getAuthToken(request);
+                const session = await verifySession(env.DB, token);
+                if (!session.valid) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+                const formData = await request.formData();
+                const file = formData.get('file') as File;
+
+                if (!file) {
+                    return jsonResponse({ error: 'No file uploaded' }, 400);
+                }
+
+                // User specific path
+                const key = `users/${session.userId || 'anon'}/uploads/${crypto.randomUUID()}-${file.name}`;
+
+                await env.R2.put(key, file.stream() as any, {
+                    httpMetadata: { contentType: file.type }
+                });
+
+                // Metadata will be saved after segmentation or we can save now?
+                // Let's create a partial record now
+                const now = Math.floor(Date.now() / 1000);
+                await env.DB.prepare(
+                    'INSERT INTO audio_uploads (user_id, filename, file_key, created_at) VALUES (?, ?, ?, ?)'
+                ).bind(session.userId || 0, file.name, key, now).run();
+
+                return jsonResponse({
+                    success: true,
+                    key,
+                    url: `/api/audio/proxy/${key}`
+                });
+            }
+
+            // Audio Proxy
+            if (url.pathname.startsWith('/api/audio/proxy/') && request.method === 'GET') {
+                const rawKey = url.pathname.replace('/api/audio/proxy/', '');
+                const key = decodeURIComponent(rawKey);
+
+                // Check if user has access? 
+                // The key structure includes user id users/{userId}/...
+                // But for simplicity of this task, we can allow playback if they have the key or implement check
+                // Let's implement basic check if token provided in query
+
+                const object = await env.R2.get(key);
+
+                if (!object) {
+                    return new Response('File not found', { status: 404 });
+                }
+
+                const headers = new Headers() as any;
+                object.writeHttpMetadata(headers);
+                headers.set('etag', object.httpEtag);
+
+                return new Response(object.body as any, { headers });
+            }
+
+            // Audio Segmentation
+            if (url.pathname === '/api/audio/segment' && request.method === 'POST') {
+                const token = getAuthToken(request);
+                const session = await verifySession(env.DB, token);
+                if (!session.valid) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+                const { key } = await request.json() as { key: string };
+                if (!key) return jsonResponse({ error: 'No key provided' }, 400);
+
+                const object = await env.R2.get(key);
+                if (!object) return jsonResponse({ error: 'File not found' }, 404);
+
+                const apiKey = env.API_KEY;
+                if (!apiKey) return jsonResponse({ error: 'API_KEY/Configuration error' }, 500);
+
+                // 1. Upload to Google AI File API
+                // Initial Resumable Upload Request (POST)
+                const uploadUrlInit = `https://${env.API_DOMAIN || 'generativelanguage.googleapis.com'}/upload/v1beta/files?key=${apiKey}`;
+
+                const displayName = key.split('/').pop() || key;
+                const contentType = object.httpMetadata?.contentType || 'audio/mpeg';
+
+                const initRes = await fetch(uploadUrlInit, {
+                    method: 'POST',
+                    headers: {
+                        'X-Goog-Upload-Protocol': 'resumable',
+                        'X-Goog-Upload-Command': 'start',
+                        'X-Goog-Upload-Header-Content-Length': object.size.toString(),
+                        'X-Goog-Upload-Header-Content-Type': contentType,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ file: { display_name: displayName } })
+                });
+
+                if (!initRes.ok) {
+                    const errorText = await initRes.text();
+                    return jsonResponse({ error: 'Google Upload Init Failed', details: errorText }, 500);
+                }
+
+                const uploadUrl = initRes.headers.get('x-goog-upload-url');
+                if (!uploadUrl) return jsonResponse({ error: 'No upload URL received' }, 500);
+
+                // 2. Upload Bytes (PUT)
+                const uploadRes = await fetch(uploadUrl, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Length': object.size.toString(),
+                        'X-Goog-Upload-Command': 'upload, finalize',
+                        'X-Goog-Upload-Offset': '0'
+                    },
+                    body: object.body as any // Stream directly from R2
+                });
+
+                if (!uploadRes.ok) {
+                    const errorText = await uploadRes.text();
+                    return jsonResponse({ error: 'Google Upload Content Failed', details: errorText }, 500);
+                }
+
+                const fileData = await uploadRes.json() as any;
+                const fileUri = fileData.file.uri;
+                let state = fileData.file.state;
+
+                // 3. Poll for active state
+                let attempts = 0;
+                while (state === 'PROCESSING' && attempts < 10) {
+                    await new Promise(r => setTimeout(r, 1000));
+                    const getFileRes = await fetch(`https://${env.API_DOMAIN || 'generativelanguage.googleapis.com'}/v1beta/files/${fileData.file.name.split('/').pop()}?key=${apiKey}`);
+                    const getFileData = await getFileRes.json() as any;
+                    state = getFileData.state;
+                    attempts++;
+                }
+
+                if (state !== 'ACTIVE') {
+                    return jsonResponse({ error: 'File processing timed out or failed', state }, 500);
+                }
+
+                // 4. Generate Segmentation
+                // Use custom model for listening or fallback to gemini-1.5-flash
+                const modelName = env.LISTEN_MODEL_NAME || 'gemini-1.5-flash';
+                const genUrl = `https://${env.API_DOMAIN || 'generativelanguage.googleapis.com'}/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+
+                const prompt = `Analyze this English listening test audio file (Gaokao style).
+It consists of exactly 10 listening segments:
+- Questions 1-5 (Short conversations, Part 1)
+- Questions 6-10 (Long conversations, Part 2)
+
+Please identify the start timestamp for EACH of the 10 segments.
+If a conversation is read twice, the start time is the beginning of the FIRST reading.
+Output a JSON object with this exact structure:
+{
+  "segments": [
+    { "id": 1, "startTime": 0.0, "label": "Conversation 1" },
+    ...
+  ]
+}
+Return ONLY the JSON.`;
+
+                const genRes = await fetch(genUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [
+                                { text: prompt },
+                                { file_data: { file_uri: fileUri, mime_type: contentType } }
+                            ]
+                        }]
+                    })
+                });
+
+                if (!genRes.ok) {
+                    const errorText = await genRes.text();
+                    return jsonResponse({ error: 'Gemini Generation Failed', details: errorText }, 500);
+                }
+
+                const genData = await genRes.json() as any;
+                let text = genData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+                // Clean markdown
+                text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+
+                try {
+                    const result = JSON.parse(text);
+
+                    // SAVE SEGMENTATION TO DB
+                    await env.DB.prepare(
+                        'UPDATE audio_uploads SET segments_json = ? WHERE file_key = ?'
+                    ).bind(JSON.stringify(result.segments), key).run();
+
+                    return jsonResponse({ segments: result.segments });
+                } catch (e) {
+                    return jsonResponse({ error: 'Failed to parse Gemini response', raw: text }, 500);
+                }
+            }
+
+            // Get Audio Files
+            if (url.pathname === '/api/audio/files' && request.method === 'GET') {
+                const token = getAuthToken(request);
+                const session = await verifySession(env.DB, token);
+                if (!session.valid) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+                const files = await env.DB.prepare(
+                    'SELECT * FROM audio_uploads WHERE user_id = ? ORDER BY created_at DESC'
+                ).bind(session.userId || 0).all();
+
+                return jsonResponse({ files: files.results });
+            }
+
+            // Delete Audio File
+            if (url.pathname.startsWith('/api/audio/files/') && request.method === 'DELETE') {
+                const token = getAuthToken(request);
+                const session = await verifySession(env.DB, token);
+                if (!session.valid) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+                const id = url.pathname.split('/').pop();
+
+                // Get file key first to delete from R2
+                const fileRecord = await env.DB.prepare(
+                    'SELECT * FROM audio_uploads WHERE id = ? AND user_id = ?'
+                ).bind(id, session.userId || 0).first();
+
+                if (!fileRecord) return jsonResponse({ error: 'File not found' }, 404);
+
+                // Delete from R2
+                await env.R2.delete(fileRecord.file_key as string);
+
+                // Delete from DB
+                await env.DB.prepare(
+                    'DELETE FROM audio_uploads WHERE id = ?'
+                ).bind(id).run();
+
+                return jsonResponse({ success: true });
+            }
+
+
             // Static assets fallback
             let response = await env.ASSETS.fetch(request);
+
 
             if (response.status === 404 && !url.pathname.startsWith('/api/')) {
                 // SPA fallback

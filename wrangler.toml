@@ -21,5 +21,12 @@ database_id = "ea2e5dd2-682e-4fdb-89e3-668706ad39d1"
 [vars]
 API_DOMAIN = "generativelanguage.googleapis.com"
 MODEL_NAME = "gemini-3-pro-preview"
+LISTEN_MODEL_NAME = "gemini-3-flash-preview"
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "***"
+ADMIN_PASSWORD = "Mylover10"
+
+# R2 Bucket binding
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "gaokao-english-server"
+

@@ -4,6 +4,8 @@ import { LoginPage } from './components/LoginPage';
 import { EssayGrader } from './components/EssayGrader';
 import { AdminPage } from './components/AdminPage';
 import { HistoryPage } from './components/HistoryPage';
+import { ListeningPage } from './components/ListeningPage';
+
 import { api } from './services/api';
 
 function App() {
@@ -69,6 +71,7 @@ function App() {
         userRole ? (
           <EssayGrader
             onNavigateToHistory={() => navigate('/history')}
+            onNavigateToListen={() => navigate('/listen')}
             onLogout={handleLogout}
           />
         ) : <Navigate to="/login" />
@@ -88,6 +91,13 @@ function App() {
           <HistoryPage onBack={() => navigate('/grader')} />
         ) : <Navigate to="/login" />
       } />
+
+      <Route path="/listen" element={
+        userRole ? (
+          <ListeningPage />
+        ) : <Navigate to="/login" />
+      } />
+
 
       <Route path="*" element={<Navigate to="/login" />} />
     </Routes>
