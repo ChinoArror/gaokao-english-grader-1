@@ -190,6 +190,18 @@ export const api = {
         return data.files || [];
     },
 
+    async getAudioBlobUrl(key: string): Promise<string> {
+        const token = getAuthToken();
+        const headers: HeadersInit = {};
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`; // Just in case proxy checks token later
+        }
+        const response = await fetch(`${API_BASE}/audio/proxy/${key}`, { headers });
+        if (!response.ok) throw new Error('Failed to load audio file');
+        const blob = await response.blob();
+        return URL.createObjectURL(blob);
+    },
+
     async deleteAudio(id: number): Promise<void> {
         const response = await authFetch(`${API_BASE}/audio/files/${id}`, {
             method: 'DELETE'

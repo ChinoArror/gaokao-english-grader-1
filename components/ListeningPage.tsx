@@ -12,6 +12,8 @@ export function ListeningPage() {
     const [file, setFile] = useState<File | null>(null);
     const [segments, setSegments] = useState<Segment[]>([]);
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
+    const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+    const [batchIndex, setBatchIndex] = useState<number>(-1);
     const [loading, setLoading] = useState(false);
     const [progress, setProgress] = useState(0); // 0-100
     const [status, setStatus] = useState<string>('');
@@ -38,25 +40,29 @@ export function ListeningPage() {
         }
     };
 
-    const handleSelectHistory = (fileRecord: any) => {
-        // Set audio url from proxy
-        setAudioUrl(`/api/audio/proxy/${fileRecord.file_key}`);
+    const handleSelectHistory = async (fileRecord: any) => {
+        setFile(null); // Clear local file selection
+        setPendingFiles([]);
+        setStatus(`Loading audio: ${fileRecord.filename}...`);
+        setShowHistory(false);
+        setAudioUrl(null);
+        setSegments([]);
+        setCurrentFileId(null);
 
-        // Parse segments if available
         try {
+            const url = await api.getAudioBlobUrl(fileRecord.file_key);
+            setAudioUrl(url);
+
+            // Parse segments if available
             if (fileRecord.segments_json) {
                 setSegments(JSON.parse(fileRecord.segments_json));
-            } else {
-                setSegments([]);
             }
-        } catch (e) {
-            setSegments([]);
-        }
 
-        setCurrentFileId(fileRecord.id);
-        setFile(null); // Clear local file selection
-        setStatus(`Loaded: ${fileRecord.filename}`);
-        setShowHistory(false);
+            setCurrentFileId(fileRecord.id);
+            setStatus(`Loaded: ${fileRecord.filename}`);
+        } catch (e) {
+            setStatus('Failed to load audio from history');
+        }
     };
 
     const handleDeleteHistory = async (e: React.MouseEvent, id: number) => {
@@ -105,14 +111,70 @@ export function ListeningPage() {
 
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            const selectedFile = e.target.files[0];
-            setFile(selectedFile);
-            setAudioUrl(URL.createObjectURL(selectedFile));
-            setSegments([]);
-            setActiveSegmentId(null);
-            setCurrentFileId(null);
-            setStatus('');
+        if (e.target.files && e.target.files.length > 0) {
+            const selectedFiles = Array.from(e.target.files) as File[];
+
+            if (selectedFiles.length === 1) {
+                const selectedFile = selectedFiles[0];
+                setFile(selectedFile);
+                setPendingFiles([]);
+                setBatchIndex(-1);
+                setAudioUrl(URL.createObjectURL(selectedFile));
+                setSegments([]);
+                setActiveSegmentId(null);
+                setCurrentFileId(null);
+                setStatus('');
+            } else {
+                setPendingFiles(selectedFiles);
+                setFile(null);
+                setAudioUrl(null);
+                setSegments([]);
+                setActiveSegmentId(null);
+                setCurrentFileId(null);
+                setBatchIndex(-1);
+                setStatus(`Selected ${selectedFiles.length} files. Ready to process batch.`);
+            }
+        }
+    };
+
+    const processBatch = async () => {
+        if (pendingFiles.length === 0) return;
+
+        setLoading(true);
+        let successCount = 0;
+
+        for (let i = 0; i < pendingFiles.length; i++) {
+            setBatchIndex(i);
+            const currentFile = pendingFiles[i];
+            setStatus(`Processing file ${i + 1}/${pendingFiles.length}: ${currentFile.name}...`);
+            setProgress(20);
+
+            try {
+                const uploadResult = await api.uploadAudio(currentFile);
+
+                setStatus(`AI is listening to ${currentFile.name}... (This may take ~30s)`);
+                setProgress(50);
+
+                await api.segmentAudio(uploadResult.key);
+                successCount++;
+                await loadHistory(); // Reload history incrementally
+
+                setStatus(`Completed: ${currentFile.name}`);
+                setProgress(100);
+            } catch (error: any) {
+                console.error(`Error processing ${currentFile.name}:`, error);
+                setStatus(`Error on ${currentFile.name}: ${error.message}`);
+                await new Promise(r => setTimeout(r, 2000));
+            }
+        }
+
+        setLoading(false);
+        if (successCount === pendingFiles.length) {
+            setStatus(`Batch complete! Successfully processed ${successCount} files.`);
+            setPendingFiles([]);
+            setBatchIndex(-1);
+        } else {
+            setStatus(`Batch complete with errors! Processed ${successCount}/${pendingFiles.length} files.`);
         }
     };
 
@@ -274,7 +336,7 @@ export function ListeningPage() {
 
                         {/* Upload & Controls */}
                         <div className="mb-10 text-center">
-                            {!file && !currentFileId ? (
+                            {!file && !currentFileId && pendingFiles.length === 0 ? (
                                 <div
                                     className="group border-2 border-dashed border-gray-300 hover:border-teal-500 rounded-3xl p-10 transition-all cursor-pointer bg-gray-50/50 hover:bg-teal-50/20"
                                     style={{ WebkitTapHighlightColor: 'transparent' }}
@@ -282,6 +344,7 @@ export function ListeningPage() {
                                     <input
                                         type="file"
                                         accept="audio/*,.mp3,.wav,.m4a,.aac,.m4r"
+                                        multiple
                                         onChange={handleFileChange}
                                         className="hidden"
                                         id="audio-upload"
@@ -290,9 +353,57 @@ export function ListeningPage() {
                                         <div className="p-4 bg-white rounded-full shadow-sm mb-4 group-hover:scale-110 transition-transform">
                                             <svg className="w-8 h-8 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
                                         </div>
-                                        <div className="text-lg font-semibold text-gray-700 mb-1">Upload Listening File</div>
+                                        <div className="text-lg font-semibold text-gray-700 mb-1">Upload Listening File(s)</div>
                                         <div className="text-sm text-gray-400">MP3, WAV, or M4A supported</div>
                                     </label>
+                                </div>
+                            ) : pendingFiles.length > 0 ? (
+                                <div className="flex flex-col items-center animate-slide-up">
+                                    <div className="flex items-center space-x-4 mb-8 bg-blue-50 px-6 py-3 rounded-2xl border border-blue-100 text-blue-800 w-full max-w-md justify-between">
+                                        <div className="flex items-center font-bold">
+                                            <svg className="w-5 h-5 mr-3 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                                            {pendingFiles.length} Files Selected
+                                        </div>
+                                        {batchIndex === -1 && (
+                                            <button
+                                                onClick={() => { setPendingFiles([]); setStatus(''); }}
+                                                className="text-blue-400 hover:text-blue-600 p-1"
+                                                title="Clear Batch"
+                                            >
+                                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    <div className="w-full max-w-md bg-white border border-gray-100 rounded-xl max-h-48 overflow-y-auto mb-8 shadow-inner p-2 space-y-1 text-left">
+                                        {pendingFiles.map((f, i) => (
+                                            <div key={i} className={`flex items-center p-2 rounded-lg ${batchIndex === i ? 'bg-teal-50 text-teal-700 font-medium border border-teal-100' : 'text-gray-600 hover:bg-gray-50 border border-transparent'}`}>
+                                                <div className="flex-1 truncate text-sm flex items-center pr-2">
+                                                    {batchIndex === i && loading ? (
+                                                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-teal-600" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                                    ) : (batchIndex > i || (batchIndex === -1 && status.includes('Successfully processed'))) ? (
+                                                        <svg className="w-4 h-4 mr-2 text-emerald-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+                                                    ) : (
+                                                        <span className="w-4 h-4 mr-2 block flex-shrink-0"></span> // Placeholder
+                                                    )}
+                                                    <span className="truncate">{f.name}</span>
+                                                </div>
+                                                <div className="text-xs text-gray-400 flex-shrink-0">{(f.size / 1024 / 1024).toFixed(1)} MB</div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <button
+                                        onClick={processBatch}
+                                        disabled={loading || batchIndex !== -1}
+                                        className={`px-8 py-3 rounded-xl text-white font-bold text-lg shadow-lg transition-all transform flex items-center
+                                            ${loading || batchIndex !== -1
+                                                ? 'bg-gray-400 cursor-not-allowed shadow-none hover:translate-y-0'
+                                                : 'bg-gradient-to-r from-blue-500 to-indigo-600 hover:scale-105 hover:shadow-xl active:scale-95'}
+                                        `}
+                                    >
+                                        {loading ? 'Processing Batch...' : 'Start Batch Processing'}
+                                    </button>
                                 </div>
                             ) : (
                                 <div className="flex flex-col items-center animate-slide-up">
