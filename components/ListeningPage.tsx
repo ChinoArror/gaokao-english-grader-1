@@ -275,10 +275,13 @@ export function ListeningPage() {
                         {/* Upload & Controls */}
                         <div className="mb-10 text-center">
                             {!file && !currentFileId ? (
-                                <div className="group border-2 border-dashed border-gray-300 hover:border-teal-500 rounded-3xl p-10 transition-all cursor-pointer bg-gray-50/50 hover:bg-teal-50/20">
+                                <div
+                                    className="group border-2 border-dashed border-gray-300 hover:border-teal-500 rounded-3xl p-10 transition-all cursor-pointer bg-gray-50/50 hover:bg-teal-50/20"
+                                    style={{ WebkitTapHighlightColor: 'transparent' }}
+                                >
                                     <input
                                         type="file"
-                                        accept="audio/*"
+                                        accept="audio/*,.mp3,.wav,.m4a,.aac,.m4r"
                                         onChange={handleFileChange}
                                         className="hidden"
                                         id="audio-upload"
@@ -392,7 +395,7 @@ export function ListeningPage() {
                                                 {segments.filter(s => s.id <= 5).map((seg) => (
                                                     <button
                                                         key={seg.id}
-                                                        onClick={() => jumpToSegment(seg.startTime)}
+                                                        onClick={() => jumpToSegment(Number(seg.startTime))}
                                                         className={`p-3 rounded-xl border text-left transition-all relative overflow-hidden group
                                                     ${activeSegmentId === seg.id
                                                                 ? 'bg-teal-500 border-teal-600 text-white shadow-md scale-105 ring-2 ring-teal-200'
@@ -403,7 +406,7 @@ export function ListeningPage() {
                                                         <div className="flex justify-between items-start mb-1">
                                                             <span className={`text-xs font-bold uppercase tracking-wider ${activeSegmentId === seg.id ? 'text-teal-100' : 'text-gray-400 group-hover:text-teal-500'}`}>Q{seg.id}</span>
                                                             <span className={`text-xs font-mono ${activeSegmentId === seg.id ? 'text-teal-100 opacity-80' : 'text-gray-400'}`}>
-                                                                {Math.floor(seg.startTime / 60)}:{(seg.startTime % 60).toFixed(0).padStart(2, '0')}
+                                                                {Math.floor(Number(seg.startTime) / 60)}:{(Number(seg.startTime) % 60).toFixed(0).padStart(2, '0')}
                                                             </span>
                                                         </div>
                                                         <div className={`text-sm font-bold truncate ${activeSegmentId === seg.id ? 'text-white' : 'text-gray-800'}`}>
@@ -421,7 +424,7 @@ export function ListeningPage() {
                                                 {segments.filter(s => s.id > 5).map((seg) => (
                                                     <button
                                                         key={seg.id}
-                                                        onClick={() => jumpToSegment(seg.startTime)}
+                                                        onClick={() => jumpToSegment(Number(seg.startTime))}
                                                         className={`p-3 rounded-xl border text-left transition-all relative overflow-hidden group
                                                     ${activeSegmentId === seg.id
                                                                 ? 'bg-indigo-500 border-indigo-600 text-white shadow-md scale-105 ring-2 ring-indigo-200'
@@ -432,7 +435,7 @@ export function ListeningPage() {
                                                         <div className="flex justify-between items-start mb-1">
                                                             <span className={`text-xs font-bold uppercase tracking-wider ${activeSegmentId === seg.id ? 'text-indigo-100' : 'text-gray-400 group-hover:text-indigo-500'}`}>Q{seg.id}</span>
                                                             <span className={`text-xs font-mono ${activeSegmentId === seg.id ? 'text-indigo-100 opacity-80' : 'text-gray-400'}`}>
-                                                                {Math.floor(seg.startTime / 60)}:{(seg.startTime % 60).toFixed(0).padStart(2, '0')}
+                                                                {Math.floor(Number(seg.startTime) / 60)}:{(Number(seg.startTime) % 60).toFixed(0).padStart(2, '0')}
                                                             </span>
                                                         </div>
                                                         <div className={`text-sm font-bold truncate ${activeSegmentId === seg.id ? 'text-white' : 'text-gray-800'}`}>
