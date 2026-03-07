@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { api } from '../services/api'; // Correct import path from components/
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { api } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 
 interface Segment {
@@ -8,7 +8,18 @@ interface Segment {
     label: string;
 }
 
+// Curated icon paths for random selection
+const ICON_PATHS = [
+    "M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z",
+    "M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3",
+    "M15.536 8.464a5 5 0 010 7.072M12 18.657V5.343m3.536 13.314C17.149 17.044 18 15.586 18 14s-.851-3.044-2.464-4.657m0 9.314C17.149 20.27 18 18.44 18 16.5m-9 1.5a5 5 0 010-7.072m0 7.072C6.851 17.044 6 15.586 6 14s.851-3.044 2.464-4.657m0 9.314C6.851 20.27 6 18.44 6 16.5",
+    "M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4",
+    "M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z",
+];
+
 export function ListeningPage() {
+    const displayName = localStorage.getItem('auth_username') || localStorage.getItem('user_uuid')?.slice(0, 8) || 'there';
+    const iconPath = useMemo(() => ICON_PATHS[Math.floor(Math.random() * ICON_PATHS.length)], []);
     const [file, setFile] = useState<File | null>(null);
     const [segments, setSegments] = useState<Segment[]>([]);
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -263,10 +274,13 @@ export function ListeningPage() {
                     <div className="flex items-center space-x-3">
                         <div className="bg-gradient-to-br from-teal-500 to-emerald-600 text-white p-2.5 rounded-xl shadow-lg shadow-teal-500/20">
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={iconPath} />
                             </svg>
                         </div>
-                        <h1 className="text-xl font-bold text-gray-900 tracking-tight">Listening Segmentation</h1>
+                        <div>
+                            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Listening Segmentation</h1>
+                            <p className="text-xs text-gray-400 font-medium -mt-0.5">Hi, {displayName} 👋</p>
+                        </div>
                     </div>
                     <div className="flex items-center space-x-3">
                         <button

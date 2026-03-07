@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { LoginPage } from './components/LoginPage';
+import { SSOCallback } from './components/SSOCallback';
 import { EssayGrader } from './components/EssayGrader';
 import { AdminPage } from './components/AdminPage';
 import { HistoryPage } from './components/HistoryPage';
@@ -16,19 +17,22 @@ function App() {
   const location = useLocation();
 
   useEffect(() => {
-    // Check if user has valid session
+    // Skip session check on callback page — SSOCallback handles its own flow
+    if (location.pathname === '/sso-callback') {
+      setLoading(false);
+      return;
+    }
+
     const checkSession = async () => {
       const session = await api.verifySession();
-      if (session.valid && session.role && session.username) {
+      if (session.valid && session.role && (session.username || session.name)) {
         setUserRole(session.role as 'admin' | 'user');
-        setUsername(session.username); // Keep username in state if needed
+        setUsername(session.username || session.name || '');
 
-        // Redirect from login/root to appropriate dashboard
         if (location.pathname === '/login' || location.pathname === '/') {
           navigate(session.role === 'admin' ? '/admin' : '/grader');
         }
       } else {
-        // Redirect to login if not valid and trying to access protected routes
         if (location.pathname !== '/login') {
           navigate('/login');
         }
@@ -37,19 +41,19 @@ function App() {
     };
 
     checkSession();
-  }, [navigate]); // Only run on mount (and nav change if needed, but here mainly mount)
+  }, [navigate]); // Only run on mount
 
-  const handleLoginSuccess = (role: string, username: string) => {
+  const handleLoginSuccess = (role: string, uname: string) => {
     setUserRole(role as 'admin' | 'user');
-    setUsername(username);
+    setUsername(uname);
     navigate(role === 'admin' ? '/admin' : '/grader');
   };
 
   const handleLogout = async () => {
+    // api.logout() redirects to auth-center; no need to navigate manually
     await api.logout();
     setUserRole(null);
     setUsername('');
-    navigate('/login');
   };
 
   if (loading) {
@@ -66,6 +70,9 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage onLoginSuccess={handleLoginSuccess} />} />
+
+      {/* SSO Callback route — handles JWT from auth-center redirect */}
+      <Route path="/sso-callback" element={<SSOCallback onLoginSuccess={handleLoginSuccess} />} />
 
       <Route path="/grader" element={
         userRole ? (
@@ -97,7 +104,6 @@ function App() {
           <ListeningPage />
         ) : <Navigate to="/login" />
       } />
-
 
       <Route path="*" element={<Navigate to="/login" />} />
     </Routes>

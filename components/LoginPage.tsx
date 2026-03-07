@@ -2,33 +2,15 @@ import React, { useState } from 'react';
 import { api } from '../services/api';
 
 interface LoginPageProps {
-    onLoginSuccess: (role: string, username: string, userId?: number) => void;
+    onLoginSuccess: (role: string, username: string) => void;
 }
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
-    const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
-    const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setError('');
+    const handleSSO = () => {
         setLoading(true);
-
-        try {
-            const result = await api.login(username, password);
-
-            if (result.success && result.role && result.username) {
-                onLoginSuccess(result.role, result.username, result.userId);
-            } else {
-                setError(result.error || 'Login failed. Please try again.');
-            }
-        } catch (err) {
-            setError('Connection error. Please try again.');
-        } finally {
-            setLoading(false);
-        }
+        api.redirectToSSO();
     };
 
     return (
@@ -44,50 +26,29 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                     <p className="text-gray-500 mt-3 text-sm">Sign in to continue</p>
                 </div>
 
-                <form onSubmit={handleSubmit} className="space-y-6">
-                    <div className="group">
-                        <label htmlFor="username" className="block text-sm font-semibold text-gray-700 mb-2 ml-1 transition-colors group-focus-within:text-indigo-600">
-                            Username
-                        </label>
-                        <input
-                            type="text"
-                            id="username"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            className="w-full px-5 py-4 rounded-xl border border-gray-200 bg-gray-50/50 focus:bg-white focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 transition-all duration-300 outline-none shadow-sm"
-                            placeholder="Enter username..."
-                            autoFocus
-                            required
-                        />
-                    </div>
-
-                    <div className="group">
-                        <label htmlFor="password" className="block text-sm font-semibold text-gray-700 mb-2 ml-1 transition-colors group-focus-within:text-indigo-600">
-                            Password
-                        </label>
-                        <input
-                            type="password"
-                            id="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="w-full px-5 py-4 rounded-xl border border-gray-200 bg-gray-50/50 focus:bg-white focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 transition-all duration-300 outline-none shadow-sm"
-                            placeholder="Enter password..."
-                            required
-                        />
-                        {error && <p className="mt-2 text-sm text-red-500 font-medium pl-1 animate-fade-in">{error}</p>}
-                    </div>
-
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-bold py-4 px-6 rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-blue-600/40 transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {loading ? 'Signing in...' : 'Sign In'}
-                    </button>
-                </form>
+                <button
+                    id="sso-login-btn"
+                    onClick={handleSSO}
+                    disabled={loading}
+                    className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-bold py-4 px-6 rounded-xl shadow-lg shadow-blue-500/30 hover:shadow-blue-600/40 transform hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
+                >
+                    {loading ? (
+                        <>
+                            <div className="inline-block w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            Redirecting...
+                        </>
+                    ) : (
+                        <>
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                            </svg>
+                            Login With Aryuki Auth Center
+                        </>
+                    )}
+                </button>
 
                 <p className="mt-8 text-xs text-center text-gray-400 font-medium tracking-wide">
-                    POWERED BY GOOGLE CLOUD & GEMINI 3.0
+                    POWERED BY GOOGLE CLOUD &amp; GEMINI 3.0
                 </p>
             </div>
         </div>

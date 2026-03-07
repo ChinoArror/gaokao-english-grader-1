@@ -34,11 +34,10 @@ export interface AuthState {
 }
 
 export interface User {
-  id: number;
+  uuid: string;
   username: string;
-  password?: string;
-  created_at: number;
-  status: 'active' | 'suspended';
+  name: string;
+  last_seen: string;
 }
 
 export interface UsageStat {
@@ -57,13 +56,4 @@ export interface HistoryRecord {
   topic: string;
   original_content: string;
   feedback: string;
-}
-
-export interface LoginResponse {
-  success: boolean;
-  token?: string;
-  role?: 'admin' | 'user';
-  username?: string;
-  userId?: number;
-  error?: string;
 }
