@@ -145,6 +145,32 @@ function getAuthToken(request: Request): string | null {
     return authHeader.substring(7);
 }
 
+const GRADE_CONTINUE_PROMPT =
+    'Continue the previous grading response exactly from where it stopped. Do not repeat earlier text. Do not restart sections. Return only the remaining content.';
+
+function extractCandidateText(candidate: any): string {
+    const parts = candidate?.content?.parts || [];
+    return parts.map((part: any) => typeof part?.text === 'string' ? part.text : '').join('');
+}
+
+function isTruncatedCandidate(candidate: any): boolean {
+    const finishReason = String(candidate?.finishReason || '').toUpperCase();
+    return finishReason.includes('MAX');
+}
+
+function splitTranscriptionAndFeedback(rawText: string, fallbackOriginalContent = ''): { feedbackText: string; transcribedContent: string } {
+    let feedbackText = rawText;
+    let transcribedContent = fallbackOriginalContent;
+
+    const transcriptionMatch = rawText.match(/<<<TRANSCRIPTION>>>([\s\S]*?)<<<END_TRANSCRIPTION>>>/);
+    if (transcriptionMatch) {
+        transcribedContent = transcriptionMatch[1].trim();
+        feedbackText = rawText.replace(/<<<TRANSCRIPTION>>>[\s\S]*?<<<END_TRANSCRIPTION>>>/, '').trim();
+    }
+
+    return { feedbackText, transcribedContent };
+}
+
 // ─── Main fetch handler ──────────────────────────────────────────────────────
 
 export default {
@@ -351,6 +377,11 @@ export default {
                 const sso = await verifySSOToken(token, env);
                 if (!sso.valid) return jsonResponse({ error: 'Unauthorized' }, 401);
 
+                const contentLength = Number(request.headers.get('content-length') || '0');
+                if (contentLength > 10 * 1024 * 1024) {
+                    return jsonResponse({ error: 'Uploaded images are too large. Please reduce the image count or file size and try again.' }, 413);
+                }
+
                 // Pre-check quota (blocks if exceeded)
                 if (!sso.isAdmin) {
                     try {
@@ -387,18 +418,68 @@ export default {
                 }
 
                 const data = await response.json() as any;
-                let feedbackText = '';
-                let transcribedContent = meta?.originalContent || '';
+                const mergedResponses: string[] = [];
+                let latestData = data;
+                let latestCandidate = data.candidates?.[0];
+                let finishReason = latestCandidate?.finishReason || null;
+                let totalTokenCount = data.usageMetadata?.totalTokenCount || 0;
 
-                if (data.candidates && data.candidates.length > 0) {
-                    const parts = data.candidates[0].content?.parts || [];
-                    feedbackText = parts.map((p: any) => p.text || '').join('');
+                if (latestCandidate) {
+                    const initialText = extractCandidateText(latestCandidate);
+                    if (initialText) mergedResponses.push(initialText);
+                }
 
-                    const transcriptionMatch = feedbackText.match(/<<<TRANSCRIPTION>>>([\s\S]*?)<<<END_TRANSCRIPTION>>>/);
-                    if (transcriptionMatch) {
-                        transcribedContent = transcriptionMatch[1].trim();
-                        feedbackText = feedbackText.replace(/<<<TRANSCRIPTION>>>[\s\S]*?<<<END_TRANSCRIPTION>>>/, '').trim();
+                let truncated = isTruncatedCandidate(latestCandidate);
+                let continuationCount = 0;
+
+                while (truncated && continuationCount < 2) {
+                    continuationCount++;
+
+                    const continuationPayload = {
+                        ...payload,
+                        contents: [
+                            ...(payload.contents || []),
+                            { role: 'model', parts: [{ text: mergedResponses.join('') }] },
+                            { role: 'user', parts: [{ text: GRADE_CONTINUE_PROMPT }] },
+                        ],
+                    };
+
+                    try {
+                        const continuationResponse = await fetch(apiUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(continuationPayload),
+                        });
+
+                        if (!continuationResponse.ok) {
+                            console.warn('Gemini continuation failed with status:', continuationResponse.status);
+                            break;
+                        }
+
+                        const continuationData = await continuationResponse.json() as any;
+                        latestData = continuationData;
+                        latestCandidate = continuationData.candidates?.[0];
+                        finishReason = latestCandidate?.finishReason || finishReason;
+                        totalTokenCount += continuationData.usageMetadata?.totalTokenCount || 0;
+
+                        const continuationText = extractCandidateText(latestCandidate);
+                        if (!continuationText) break;
+
+                        mergedResponses.push(continuationText);
+                        truncated = isTruncatedCandidate(latestCandidate);
+                    } catch (continuationError) {
+                        console.warn('Gemini continuation request failed:', continuationError);
+                        break;
                     }
+                }
+
+                const combinedResponseText = mergedResponses.join('');
+                const parsedResult = splitTranscriptionAndFeedback(combinedResponseText, meta?.originalContent || '');
+                let feedbackText = parsedResult.feedbackText;
+                const transcribedContent = parsedResult.transcribedContent;
+
+                if (truncated) {
+                    feedbackText = `${feedbackText}\n\n> Note: The AI response may still be incomplete because it reached the model output limit.`;
                 }
 
                 const now = Math.floor(Date.now() / 1000);
@@ -410,7 +491,7 @@ export default {
                 ).bind(dbId, now, meta?.topic || '', transcribedContent, feedbackText).run();
 
                 // Estimate tokens
-                const estimatedTokens = data.usageMetadata?.totalTokenCount ||
+                const estimatedTokens = totalTokenCount ||
                     Math.ceil((JSON.stringify(payload).length + feedbackText.length) / 4);
 
                 // Async: log usage + consume quota (fire-and-forget)
@@ -420,7 +501,14 @@ export default {
                     sso.isAdmin ? Promise.resolve() : consumeQuota(sso.uuid!, estimatedTokens, env),
                 ]));
 
-                return jsonResponse({ ...data, transcription: transcribedContent });
+                return jsonResponse({
+                    ...latestData,
+                    feedback: feedbackText,
+                    transcription: transcribedContent,
+                    finishReason,
+                    truncated,
+                    continuationCount,
+                });
             }
 
             // ══════════════════════════════════════════════════════════════════

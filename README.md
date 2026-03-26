@@ -1,6 +1,8 @@
 # Gaokao English Grader - AI Essay Grading System
 
-A comprehensive AI-powered English essay grading system designed for Gaokao (高考) exams, featuring advanced user management, grading history, detailed usage statistics, and transcription capabilities.
+[简体中文说明](./README_zh.md)
+
+A comprehensive AI-powered English essay grading system designed for Gaokao exams, featuring advanced user management, grading history, detailed usage statistics, and transcription capabilities.
 
 ## 🚀 Features
 
@@ -236,6 +238,18 @@ For issues or questions:
 2. Verify API key is correctly configured
 3. Check browser console for client-side errors
 4. Review Cloudflare Workers logs for server errors
+
+## Experience
+
+Operational notes from recent fixes and production debugging:
+
+- **Gemini calls stay on the backend**: The browser only sends grading requests to this app's Worker. The actual Gemini `generateContent` call is executed in [worker/index.ts](./worker/index.ts), which helps when the end user's local network cannot access Gemini directly but Cloudflare Workers still can.
+- **Large image uploads can fail before grading starts**: In image mode, sending raw phone photos as Base64 can create very large JSON payloads. This may surface in the browser as `Failed to fetch` or `ERR_CONNECTION_CLOSED` instead of a clean API error.
+- **Client-side image compression matters**: Image grading requests are resized and compressed in the frontend before they are sent to the Worker to reduce payload size and improve reliability.
+- **Long image grading outputs can be truncated**: Image grading asks the model to return both a full transcription and a full grading report, which can hit model output limits and make the result appear incomplete.
+- **The Worker now handles truncation more defensively**: The backend checks for truncated Gemini responses, can ask Gemini to continue, and returns an explicit signal if the final answer may still be incomplete.
+- **History stores processed Markdown feedback**: The saved `history.feedback` field contains Markdown grading output with transcription markers removed, while `history.original_content` stores the original essay text or OCR/transcription text.
+- **Markdown copy is now a first-class export path**: The grading result and history details can be copied as Markdown directly from the UI without relying on rendered HTML.
 
 ---
 

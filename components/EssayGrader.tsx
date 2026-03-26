@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { EssayType, InputMethod, EssaySubmission } from '../types';
 import { gradeEssay } from '../services/geminiService';
+import { copyTextAsMarkdown } from '../services/clipboard';
 import { marked } from 'marked';
 
 interface EssayGraderProps {
@@ -42,6 +43,7 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
   const [transcription, setTranscription] = useState<string | null>(null);
   const [showTranscription, setShowTranscription] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resultCopied, setResultCopied] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -105,6 +107,17 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const handleCopyResult = async () => {
+    if (!result) return;
+    try {
+      await copyTextAsMarkdown(result);
+      setResultCopied(true);
+      window.setTimeout(() => setResultCopied(false), 2000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to copy markdown.');
+    }
   };
 
   // Render markdown securely
@@ -400,6 +413,16 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
                       Grading Complete
                     </h3>
                     <div className="flex space-x-3">
+                      <button
+                        onClick={handleCopyResult}
+                        className="text-xs font-bold bg-white text-slate-700 px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 hover:border-slate-300 shadow-sm transition-all flex items-center"
+                        title="Copy Markdown"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 10h6a2 2 0 002-2v-8a2 2 0 00-2-2h-6a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                        {resultCopied ? 'Copied' : 'Copy MD'}
+                      </button>
                       <button
                         onClick={handleDownloadMD}
                         className="text-xs font-bold bg-white text-blue-600 px-4 py-2 rounded-xl border border-blue-100 hover:bg-blue-50 hover:border-blue-200 shadow-sm transition-all flex items-center"

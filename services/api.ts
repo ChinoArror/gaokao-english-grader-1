@@ -127,10 +127,18 @@ export const api = {
     // ── Grade essay ───────────────────────────────────────────────────────────
 
     async gradeEssay(payload: any, meta: { topic: string; originalContent?: string; isImage?: boolean }): Promise<any> {
-        const response = await authFetch(`${API_BASE}/grade`, {
-            method: 'POST',
-            body: JSON.stringify({ payload, meta }),
-        });
+        let response: Response;
+        try {
+            response = await authFetch(`${API_BASE}/grade`, {
+                method: 'POST',
+                body: JSON.stringify({ payload, meta }),
+            });
+        } catch (error: any) {
+            const suffix = meta.isImage
+                ? ' The image payload may be too large, or the network connection was interrupted.'
+                : ' The network connection was interrupted.';
+            throw new Error(`Failed to reach the grading service.${suffix}`);
+        }
 
         if (!response.ok) {
             const error = await response.json() as any;

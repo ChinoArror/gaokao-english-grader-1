@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { marked } from 'marked';
 import { api } from '../services/api';
+import { copyTextAsMarkdown } from '../services/clipboard';
 import { HistoryRecord } from '../types';
 
 interface HistoryPageProps {
@@ -11,6 +12,7 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ onBack }) => {
     const [history, setHistory] = useState<HistoryRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedRecord, setSelectedRecord] = useState<HistoryRecord | null>(null);
+    const [copiedTarget, setCopiedTarget] = useState<'original' | 'feedback' | null>(null);
 
     useEffect(() => {
         loadHistory();
@@ -106,6 +108,22 @@ ${record.feedback}
         printWindow.onload = () => {
             printWindow.print();
         };
+    };
+
+    const handleCopyMarkdown = async (target: 'original' | 'feedback') => {
+        if (!selectedRecord) return;
+
+        const markdown = target === 'original'
+            ? `## Original Content\n\n${selectedRecord.original_content || 'N/A'}`
+            : selectedRecord.feedback;
+
+        try {
+            await copyTextAsMarkdown(markdown);
+            setCopiedTarget(target);
+            window.setTimeout(() => setCopiedTarget((current) => current === target ? null : current), 2000);
+        } catch (err) {
+            console.error('Failed to copy markdown:', err);
+        }
     };
 
     return (
@@ -220,12 +238,24 @@ ${record.feedback}
 
                                 {selectedRecord.original_content && (
                                     <div className="mb-6">
-                                        <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                            </svg>
-                                            Original Content
-                                        </h3>
+                                        <div className="flex items-center justify-between mb-3 gap-3">
+                                            <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                                </svg>
+                                                Original Content
+                                            </h3>
+                                            <button
+                                                onClick={() => handleCopyMarkdown('original')}
+                                                className="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold bg-white text-slate-700 rounded-lg border border-slate-200 hover:bg-slate-50 hover:border-slate-300 shadow-sm transition-all"
+                                                title="Copy Original Markdown"
+                                            >
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 10h6a2 2 0 002-2v-8a2 2 0 00-2-2h-6a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                                </svg>
+                                                {copiedTarget === 'original' ? 'Copied' : 'Copy MD'}
+                                            </button>
+                                        </div>
                                         <div className="p-4 bg-gray-50 rounded-xl border border-gray-200">
                                             <p className="whitespace-pre-wrap text-gray-700">{selectedRecord.original_content}</p>
                                         </div>
@@ -233,12 +263,24 @@ ${record.feedback}
                                 )}
 
                                 <div>
-                                    <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                                        </svg>
-                                        AI Feedback
-                                    </h3>
+                                    <div className="flex items-center justify-between mb-3 gap-3">
+                                        <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                                            </svg>
+                                            AI Feedback
+                                        </h3>
+                                        <button
+                                            onClick={() => handleCopyMarkdown('feedback')}
+                                            className="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold bg-white text-slate-700 rounded-lg border border-slate-200 hover:bg-slate-50 hover:border-slate-300 shadow-sm transition-all"
+                                            title="Copy Feedback Markdown"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 10h6a2 2 0 002-2v-8a2 2 0 00-2-2h-6a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                            </svg>
+                                            {copiedTarget === 'feedback' ? 'Copied' : 'Copy MD'}
+                                        </button>
+                                    </div>
                                     <div
                                         className="prose prose-indigo max-w-none p-4 bg-gray-50 rounded-xl border border-gray-200"
                                         dangerouslySetInnerHTML={{ __html: marked(selectedRecord.feedback) }}
