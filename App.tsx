@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { LoginPage } from './components/LoginPage';
 import { SSOCallback } from './components/SSOCallback';
-import { EssayGrader } from './components/EssayGrader';
+import { EssayGraderV2 as EssayGrader } from './components/EssayGraderV2';
 import { AdminPage } from './components/AdminPage';
-import { HistoryPage } from './components/HistoryPage';
+import { HistoryPageV3 as HistoryPage } from './components/HistoryPageV3';
 import { ListeningPage } from './components/ListeningPage';
 
 import { api } from './services/api';

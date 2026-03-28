@@ -1,8 +1,11 @@
-import React, { useState, useMemo } from 'react';
-import { EssayType, InputMethod, EssaySubmission } from '../types';
+import React, { useEffect, useMemo, useState } from 'react';
+import { EssayType, GradingTaskResultEnvelope, InputMethod, EssaySubmission } from '../types';
 import { gradeEssay } from '../services/geminiService';
-import { copyTextAsMarkdown } from '../services/clipboard';
-import { marked } from 'marked';
+import { copyText } from '../services/clipboard';
+import { openPrintableMarkdown, openPrintableReport } from '../services/reportPrint';
+import { LegacyMarkdownReport, ReportRenderer } from './report/ReportRenderer';
+import { api } from '../services/api';
+import { essayTypeToLabel, normalizeSummaryTitle, statusToLabel } from '../utils/reportUtils';
 
 interface EssayGraderProps {
   onNavigateToHistory?: () => void;
@@ -26,6 +29,18 @@ const ICON_PATHS = [
   "M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
 ];
 
+const STATUS_BADGE_CLASS: Record<string, string> = {
+  queued: 'bg-amber-50 text-amber-700 border border-amber-200',
+  processing: 'bg-blue-50 text-blue-700 border border-blue-200',
+  successful: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  failed: 'bg-rose-50 text-rose-700 border border-rose-200',
+};
+
+const ESSAY_TYPE_BADGE_CLASS: Record<string, string> = {
+  practical: 'bg-indigo-50 text-indigo-700 border border-indigo-200',
+  continuation: 'bg-purple-50 text-purple-700 border border-purple-200',
+};
+
 export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, onNavigateToListen, onLogout }) => {
   const displayName = localStorage.getItem('auth_username') || localStorage.getItem('user_uuid')?.slice(0, 8) || 'there';
   const iconPath = useMemo(() => ICON_PATHS[Math.floor(Math.random() * ICON_PATHS.length)], []);
@@ -39,17 +54,86 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
   const [essayImages, setEssayImages] = useState<File[]>([]);
 
   const [isLoading, setIsLoading] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
+  const [taskResult, setTaskResult] = useState<GradingTaskResultEnvelope | null>(null);
+  const [legacyResult, setLegacyResult] = useState<string | null>(null);
   const [transcription, setTranscription] = useState<string | null>(null);
   const [showTranscription, setShowTranscription] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultCopied, setResultCopied] = useState(false);
+  const [taskUuid, setTaskUuid] = useState<string | null>(null);
+
+  const report = taskResult?.report || null;
+  const resultJson = taskResult ? JSON.stringify(taskResult, null, 2) : null;
+  const resultStatus = taskResult?.status || null;
+  const taskSummaryTitle = taskResult
+    ? normalizeSummaryTitle(taskResult.summaryTitle, taskResult.task_uuid, taskResult.status)
+    : '';
+  const displayTopic = taskSummaryTitle || questionText || '作文批改报告';
+
+  useEffect(() => {
+    const restoreTask = async () => {
+      const storedTaskUuid = localStorage.getItem('last_task_uuid');
+
+      if (storedTaskUuid) {
+        try {
+          const restored = await api.getTask(storedTaskUuid);
+          setTaskResult(restored);
+          setTaskUuid(restored.task_uuid);
+          setTranscription(restored.transcription || null);
+          if (restored.status === 'successful' || restored.status === 'failed') {
+            localStorage.removeItem('last_task_uuid');
+          }
+          return;
+        } catch {
+          localStorage.removeItem('last_task_uuid');
+        }
+      }
+
+      try {
+        const activeTask = await api.getLatestActiveTask();
+        if (activeTask) {
+          setTaskResult(activeTask);
+          setTaskUuid(activeTask.task_uuid);
+          setTranscription(activeTask.transcription || null);
+          localStorage.setItem('last_task_uuid', activeTask.task_uuid);
+        }
+      } catch (restoreError) {
+        console.error('Failed to restore active task:', restoreError);
+      }
+    };
+
+    restoreTask();
+  }, []);
+
+  useEffect(() => {
+    if (!taskUuid || !resultStatus || resultStatus === 'successful' || resultStatus === 'failed') {
+      return;
+    }
+
+    const timer = window.setInterval(async () => {
+      try {
+        const latest = await api.getTask(taskUuid);
+        setTaskResult(latest);
+        setTranscription(latest.transcription || null);
+        if (latest.status === 'successful' || latest.status === 'failed') {
+          localStorage.removeItem('last_task_uuid');
+          window.clearInterval(timer);
+        }
+      } catch (pollError) {
+        console.error('Failed to poll task:', pollError);
+      }
+    }, 2500);
+
+    return () => window.clearInterval(timer);
+  }, [taskUuid, resultStatus]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
-    setResult(null);
+    setTaskResult(null);
+    setLegacyResult(null);
+    setTaskUuid(null);
 
     // Validation
     if (inputMethod === InputMethod.TEXT) {
@@ -77,11 +161,20 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
 
     try {
       const response = await gradeEssay(submission);
-      setResult(response.feedback);
+      setTaskResult({
+        task_uuid: response.task_uuid!,
+        status: response.status!,
+        essayType: response.essayType || essayType,
+        inputMethod: response.inputMethod || inputMethod,
+        summaryTitle: normalizeSummaryTitle(response.summaryTitle, response.task_uuid, response.status),
+        createdAt: response.createdAt || Math.floor(Date.now() / 1000),
+        updatedAt: response.updatedAt || Math.floor(Date.now() / 1000),
+        topic: questionText || undefined,
+      });
+      setTaskUuid(response.task_uuid || null);
+      setLegacyResult(null);
       setTranscription(null);
-      if (response.transcription) {
-        setTranscription(response.transcription);
-      }
+      if (response.task_uuid) localStorage.setItem('last_task_uuid', response.task_uuid);
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred.");
     } finally {
@@ -95,14 +188,13 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
     }
   };
 
-  // Download raw markdown function
-  const handleDownloadMD = () => {
-    if (!result) return;
-    const blob = new Blob([result], { type: 'text/markdown' });
+  const handleDownloadJson = () => {
+    if (!resultJson || !taskResult) return;
+    const blob = new Blob([resultJson], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `essay-feedback-${new Date().toISOString().slice(0, 10)}.md`;
+    a.download = `grading-task-${taskResult.task_uuid}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -110,20 +202,34 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
   };
 
   const handleCopyResult = async () => {
-    if (!result) return;
+    if (!resultJson) return;
     try {
-      await copyTextAsMarkdown(result);
+      await copyText(resultJson);
       setResultCopied(true);
       window.setTimeout(() => setResultCopied(false), 2000);
     } catch (err: any) {
-      setError(err.message || 'Failed to copy markdown.');
+      setError(err.message || 'Failed to copy JSON.');
     }
   };
 
-  // Render markdown securely
-  const getMarkdownText = (text: string) => {
-    const rawMarkup = marked.parse(text);
-    return { __html: rawMarkup };
+  const handlePrintResult = () => {
+    if (report) {
+      openPrintableReport({
+        report,
+        topic: questionText || '作文批改报告',
+        originalContent: transcription || essayContent || undefined,
+        dateText: new Date().toLocaleDateString('zh-CN'),
+      });
+      return;
+    }
+
+    if (legacyResult) {
+      openPrintableMarkdown({
+        markdown: legacyResult,
+        title: questionText || '作文批改报告',
+        dateText: new Date().toLocaleDateString('zh-CN'),
+      });
+    }
   };
 
   return (
@@ -374,9 +480,9 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
           {/* RIGHT COLUMN: RESULTS */}
           <div className="space-y-0 sm:space-y-6 mt-4 sm:mt-0 pb-12 sm:pb-0">
             {/* The result container needs 'print-only-content' class for CSS filtering during print */}
-            <div className={`print-only-content bg-white sm:rounded-3xl shadow-none sm:shadow-lg sm:shadow-gray-200/50 border-t sm:border border-gray-100 h-full min-h-[500px] flex flex-col result-container transition-all ${!result && !isLoading ? 'justify-center items-center' : ''}`}>
+            <div className={`print-only-content bg-white sm:rounded-3xl shadow-none sm:shadow-lg sm:shadow-gray-200/50 border-t sm:border border-gray-100 h-full min-h-[500px] flex flex-col result-container transition-all ${!taskResult && !isLoading ? 'justify-center items-center' : ''}`}>
 
-              {!result && !isLoading && (
+              {!taskResult && !isLoading && (
                 <div className="text-center p-10 animate-fade-in">
                   <div className="bg-gray-50 h-28 w-28 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -401,7 +507,7 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
                 </div>
               )}
 
-              {result && (
+              {(report || legacyResult) && (
                 <div className="flex flex-col h-full animate-slide-up">
                   <div className="p-5 border-b border-gray-100 bg-gradient-to-r from-green-50 to-emerald-50 sm:rounded-t-3xl flex flex-wrap gap-3 justify-between items-center no-print">
                     <h3 className="font-bold text-green-800 flex items-center">
@@ -433,7 +539,7 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
                         Save .md
                       </button>
                       <button
-                        onClick={() => window.print()}
+                        onClick={handlePrintResult}
                         className="text-xs font-bold bg-white text-green-600 px-4 py-2 rounded-xl border border-green-100 hover:bg-green-50 hover:border-green-200 shadow-sm transition-all flex items-center"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -444,8 +550,12 @@ export const EssayGrader: React.FC<EssayGraderProps> = ({ onNavigateToHistory, o
                     </div>
                   </div>
                   {/* Markdown Display Area */}
-                  <div className="p-6 sm:p-10 overflow-y-auto max-h-[800px] prose prose-slate prose-headings:text-slate-800 prose-p:text-slate-600 prose-a:text-blue-600 prose-strong:text-slate-900 prose-sm sm:prose-base max-w-none result-content scroll-smooth">
-                    <div dangerouslySetInnerHTML={getMarkdownText(result)} />
+                  <div className="p-6 sm:p-10 overflow-y-auto max-h-[800px] result-content scroll-smooth bg-[radial-gradient(circle_at_top,_rgba(251,191,36,0.08),_transparent_45%),linear-gradient(180deg,#ffffff,#f8fafc)]">
+                    {report ? (
+                      <ReportRenderer report={report} topic={questionText || '作文批改报告'} truncated={resultTruncated} />
+                    ) : legacyResult ? (
+                      <LegacyMarkdownReport markdown={legacyResult} />
+                    ) : null}
                   </div>
                 </div>
               )}

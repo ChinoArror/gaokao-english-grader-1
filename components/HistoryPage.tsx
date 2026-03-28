@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { marked } from 'marked';
+import React, { useMemo, useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { copyTextAsMarkdown } from '../services/clipboard';
 import { HistoryRecord } from '../types';
+import { LegacyMarkdownReport, ReportRenderer } from './report/ReportRenderer';
+import { openPrintableMarkdown, openPrintableReport } from '../services/reportPrint';
+import { parseStructuredReport, reportToMarkdown } from '../utils/reportUtils';
 
 interface HistoryPageProps {
     onBack: () => void;
@@ -13,6 +15,23 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ onBack }) => {
     const [loading, setLoading] = useState(true);
     const [selectedRecord, setSelectedRecord] = useState<HistoryRecord | null>(null);
     const [copiedTarget, setCopiedTarget] = useState<'original' | 'feedback' | null>(null);
+
+    const parsedReport = useMemo(
+        () => (selectedRecord ? parseStructuredReport(selectedRecord.feedback) : null),
+        [selectedRecord]
+    );
+
+    const feedbackMarkdown = useMemo(() => {
+        if (!selectedRecord) return '';
+        if (parsedReport) {
+            return reportToMarkdown(parsedReport, {
+                topic: selectedRecord.topic || '作文批改报告',
+                originalContent: selectedRecord.original_content || undefined,
+                date: new Date(selectedRecord.timestamp * 1000).toLocaleDateString('zh-CN'),
+            });
+        }
+        return selectedRecord.feedback;
+    }, [parsedReport, selectedRecord]);
 
     useEffect(() => {
         loadHistory();
@@ -46,7 +65,14 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ onBack }) => {
     };
 
     const exportAsMarkdown = (record: HistoryRecord) => {
-        const markdown = `# Essay Grading Record
+        const report = parseStructuredReport(record.feedback);
+        const markdown = report
+            ? reportToMarkdown(report, {
+                topic: record.topic || '作文批改报告',
+                originalContent: record.original_content || undefined,
+                date: new Date(record.timestamp * 1000).toLocaleDateString('zh-CN'),
+            })
+            : `# Essay Grading Record
 
 **Topic:** ${record.topic || 'N/A'}
 **Date:** ${new Date(record.timestamp * 1000).toLocaleString()}
@@ -72,42 +98,22 @@ ${record.feedback}
     };
 
     const printRecord = (record: HistoryRecord) => {
-        const printWindow = window.open('', '_blank');
-        if (!printWindow) return;
+        const report = parseStructuredReport(record.feedback);
+        if (report) {
+            openPrintableReport({
+                report,
+                topic: record.topic || '作文批改报告',
+                originalContent: record.original_content || undefined,
+                dateText: new Date(record.timestamp * 1000).toLocaleDateString('zh-CN'),
+            });
+            return;
+        }
 
-        const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Essay Grading Record</title>
-        <style>
-          body { font-family: system-ui, -apple-system, sans-serif; padding: 2rem; max-width: 800px; margin: 0 auto; }
-          h1 { color: #4f46e5; border-bottom: 3px solid #4f46e5; padding-bottom: 0.5rem; }
-          h2 { color: #1e40af; margin-top: 2rem; }
-          .meta { color: #6b7280; margin-bottom: 2rem; }
-          .content { line-height: 1.6; }
-          @media print { body { padding: 1rem; } }
-        </style>
-      </head>
-      <body>
-        <h1>Essay Grading Record</h1>
-        <div class="meta">
-          <p><strong>Topic:</strong> ${record.topic || 'N/A'}</p>
-          <p><strong>Date:</strong> ${new Date(record.timestamp * 1000).toLocaleString()}</p>
-        </div>
-        <h2>Original Content</h2>
-        <div class="content">${record.original_content ? record.original_content.replace(/\n/g, '<br>') : 'N/A'}</div>
-        <h2>Feedback</h2>
-        <div class="content">${marked(record.feedback)}</div>
-      </body>
-      </html>
-    `;
-
-        printWindow.document.write(html);
-        printWindow.document.close();
-        printWindow.onload = () => {
-            printWindow.print();
-        };
+        openPrintableMarkdown({
+            markdown: record.feedback,
+            title: record.topic || '作文批改报告',
+            dateText: new Date(record.timestamp * 1000).toLocaleDateString('zh-CN'),
+        });
     };
 
     const handleCopyMarkdown = async (target: 'original' | 'feedback') => {
@@ -115,7 +121,7 @@ ${record.feedback}
 
         const markdown = target === 'original'
             ? `## Original Content\n\n${selectedRecord.original_content || 'N/A'}`
-            : selectedRecord.feedback;
+            : feedbackMarkdown;
 
         try {
             await copyTextAsMarkdown(markdown);
@@ -281,10 +287,16 @@ ${record.feedback}
                                             {copiedTarget === 'feedback' ? 'Copied' : 'Copy MD'}
                                         </button>
                                     </div>
-                                    <div
-                                        className="prose prose-indigo max-w-none p-4 bg-gray-50 rounded-xl border border-gray-200"
-                                        dangerouslySetInnerHTML={{ __html: marked(selectedRecord.feedback) }}
-                                    />
+                                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                                        {parsedReport ? (
+                                            <ReportRenderer
+                                                report={parsedReport}
+                                                topic={selectedRecord.topic || '作文批改报告'}
+                                            />
+                                        ) : (
+                                            <LegacyMarkdownReport markdown={selectedRecord.feedback} />
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         ) : (

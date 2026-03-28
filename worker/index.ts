@@ -1,9 +1,13 @@
 import { D1Database, R2Bucket } from "@cloudflare/workers-types";
+import { buildStructuredSystemPrompt, buildStructuredUserPrompt, buildSummaryTitlePrompt, ESSAY_OCR_PROMPT, QUESTION_OCR_PROMPT } from "../promptsV2";
+import { EssayType, GradeEssayRequest, GradingTaskResultEnvelope, InlineImagePart, InputMethod, StructuredReport, TaskStatus } from "../types";
+import { buildTaskResultEnvelope, normalizeSummaryTitle, parseStructuredReport, reportToMarkdown, reportToStoredFeedback } from "../utils/reportUtils";
 
 export interface Env {
     ASSETS: Fetcher;
     DB: D1Database;
     R2: R2Bucket;
+    GRADING_QUEUE: any;
     API_KEY?: string;
     API_DOMAIN?: string;
     MODEL_NAME?: string;
@@ -146,7 +150,7 @@ function getAuthToken(request: Request): string | null {
 }
 
 const GRADE_CONTINUE_PROMPT =
-    'Continue the previous grading response exactly from where it stopped. Do not repeat earlier text. Do not restart sections. Return only the remaining content.';
+    'Continue the previous JSON response exactly from where it stopped. Do not restart the JSON object. Output only the remaining JSON text.';
 
 function extractCandidateText(candidate: any): string {
     const parts = candidate?.content?.parts || [];
@@ -158,17 +162,523 @@ function isTruncatedCandidate(candidate: any): boolean {
     return finishReason.includes('MAX');
 }
 
-function splitTranscriptionAndFeedback(rawText: string, fallbackOriginalContent = ''): { feedbackText: string; transcribedContent: string } {
-    let feedbackText = rawText;
-    let transcribedContent = fallbackOriginalContent;
+function buildInlineParts(images: InlineImagePart[]) {
+    return images.map((image) => ({
+        inlineData: {
+            mimeType: image.mimeType,
+            data: image.data,
+        },
+    }));
+}
 
-    const transcriptionMatch = rawText.match(/<<<TRANSCRIPTION>>>([\s\S]*?)<<<END_TRANSCRIPTION>>>/);
-    if (transcriptionMatch) {
-        transcribedContent = transcriptionMatch[1].trim();
-        feedbackText = rawText.replace(/<<<TRANSCRIPTION>>>[\s\S]*?<<<END_TRANSCRIPTION>>>/, '').trim();
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+    let binary = '';
+
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+        const chunk = bytes.subarray(index, index + chunkSize);
+        binary += String.fromCharCode(...chunk);
     }
 
-    return { feedbackText, transcribedContent };
+    return btoa(binary);
+}
+
+async function fileToInlineImagePart(file: File): Promise<InlineImagePart> {
+    return {
+        mimeType: file.type || 'application/octet-stream',
+        data: arrayBufferToBase64(await file.arrayBuffer()),
+    };
+}
+
+function readFormValue(formData: FormData, key: string): string {
+    const value = formData.get(key);
+    return typeof value === 'string' ? value : '';
+}
+
+type ParsedGradeEssayBody = GradeEssayRequest & {
+    questionImageFiles?: File[];
+    essayImageFiles?: File[];
+};
+
+type QueueTaskMessage = {
+    task_uuid: string;
+    user_id: number;
+    user_uuid: string;
+    payload_r2_key: string;
+};
+
+type StoredTaskPayload = {
+    task_uuid: string;
+    user_id: number;
+    user_uuid: string;
+    type: EssayType;
+    method: InputMethod;
+    questionText: string;
+    essayContent: string;
+    questionImages: InlineImagePart[];
+    essayImages: InlineImagePart[];
+};
+
+type TaskRow = {
+    task_uuid: string;
+    user_id: number;
+    status: TaskStatus;
+    essay_type: EssayType;
+    input_method: InputMethod;
+    summary_title: string | null;
+    topic: string | null;
+    original_content: string | null;
+    transcription: string | null;
+    report_json: string | null;
+    error_message: string | null;
+    payload_r2_key: string | null;
+    history_id: number | null;
+    created_at: number;
+    updated_at: number;
+};
+
+async function parseGradeEssayBody(request: Request): Promise<ParsedGradeEssayBody> {
+    const contentType = request.headers.get('content-type') || '';
+
+    if (contentType.includes('multipart/form-data')) {
+        const formData = await request.formData();
+        const questionImageFiles = formData.getAll('questionImages').filter((entry): entry is File => entry instanceof File);
+        const essayImageFiles = formData.getAll('essayImages').filter((entry): entry is File => entry instanceof File);
+
+        return {
+            type: readFormValue(formData, 'type') as EssayType,
+            method: readFormValue(formData, 'method') as InputMethod,
+            questionText: readFormValue(formData, 'questionText'),
+            essayContent: readFormValue(formData, 'essayContent'),
+            questionImages: [],
+            essayImages: [],
+            questionImageFiles,
+            essayImageFiles,
+        };
+    }
+
+    return await request.json() as ParsedGradeEssayBody;
+}
+
+const TASK_PAYLOAD_PREFIX = 'grading-tasks';
+
+const buildTaskPayloadKey = (userId: number, taskUuid: string) =>
+    `${TASK_PAYLOAD_PREFIX}/${userId}/${taskUuid}.json`;
+
+const jsonStringify = (value: unknown) => JSON.stringify(value, null, 2);
+
+async function ensureTaskTables(db: D1Database) {
+    await db.prepare(
+        'CREATE TABLE IF NOT EXISTS grading_tasks (' +
+        'task_uuid TEXT PRIMARY KEY,' +
+        'user_id INTEGER NOT NULL,' +
+        'status TEXT NOT NULL,' +
+        'essay_type TEXT NOT NULL,' +
+        'input_method TEXT NOT NULL,' +
+        'summary_title TEXT,' +
+        'topic TEXT,' +
+        'original_content TEXT,' +
+        'transcription TEXT,' +
+        'report_json TEXT,' +
+        'error_message TEXT,' +
+        'payload_r2_key TEXT,' +
+        'history_id INTEGER,' +
+        'created_at INTEGER NOT NULL,' +
+        'updated_at INTEGER NOT NULL' +
+        ')'
+    ).run();
+
+    await db.prepare(
+        'CREATE TABLE IF NOT EXISTS task_user_locks (' +
+        'user_id INTEGER PRIMARY KEY,' +
+        'task_uuid TEXT NOT NULL,' +
+        'locked_at INTEGER NOT NULL' +
+        ')'
+    ).run();
+
+    try {
+        await db.prepare('ALTER TABLE history ADD COLUMN task_uuid TEXT').run();
+    } catch {
+        // ignore if already exists
+    }
+
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_grading_tasks_user_created_at ON grading_tasks(user_id, created_at DESC)').run();
+    await db.prepare('CREATE INDEX IF NOT EXISTS idx_grading_tasks_status_created_at ON grading_tasks(status, created_at DESC)').run();
+    await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_history_task_uuid ON history(task_uuid) WHERE task_uuid IS NOT NULL').run();
+}
+
+async function saveTaskPayload(env: Env, payload: StoredTaskPayload) {
+    const key = buildTaskPayloadKey(payload.user_id, payload.task_uuid);
+    await env.R2.put(key, jsonStringify(payload), {
+        httpMetadata: { contentType: 'application/json' },
+    });
+    return key;
+}
+
+async function loadTaskPayload(env: Env, payloadKey: string): Promise<StoredTaskPayload> {
+    const object = await env.R2.get(payloadKey);
+    if (!object) {
+        throw new Error('Task payload not found');
+    }
+
+    const raw = await object.text();
+    return JSON.parse(raw) as StoredTaskPayload;
+}
+
+async function createQueuedTask(db: D1Database, params: {
+    task_uuid: string;
+    user_id: number;
+    essay_type: EssayType;
+    input_method: InputMethod;
+    topic: string;
+    payload_r2_key: string;
+    timestamp: number;
+}) {
+    await db.prepare(
+        'INSERT INTO grading_tasks (task_uuid, user_id, status, essay_type, input_method, summary_title, topic, payload_r2_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(
+        params.task_uuid,
+        params.user_id,
+        'queued',
+        params.essay_type,
+        params.input_method,
+        normalizeSummaryTitle('', params.task_uuid, 'queued'),
+        params.topic,
+        params.payload_r2_key,
+        params.timestamp,
+        params.timestamp
+    ).run();
+}
+
+async function getTaskRow(db: D1Database, taskUuid: string, userId?: number): Promise<TaskRow | null> {
+    const sql = userId == null
+        ? 'SELECT * FROM grading_tasks WHERE task_uuid = ?'
+        : 'SELECT * FROM grading_tasks WHERE task_uuid = ? AND user_id = ?';
+    const stmt = db.prepare(sql);
+    const row = userId == null
+        ? await stmt.bind(taskUuid).first<TaskRow>()
+        : await stmt.bind(taskUuid, userId).first<TaskRow>();
+    return row || null;
+}
+
+async function getLatestActiveTaskRow(db: D1Database, userId: number): Promise<TaskRow | null> {
+    const row = await db.prepare(
+        'SELECT * FROM grading_tasks WHERE user_id = ? AND status IN (?, ?) ORDER BY created_at DESC LIMIT 1'
+    ).bind(userId, 'queued', 'processing').first<TaskRow>();
+    return row || null;
+}
+
+function parseTaskReport(row: TaskRow): StructuredReport | null {
+    if (!row.report_json) return null;
+    return parseStructuredReport(row.report_json);
+}
+
+function buildTaskResponse(row: TaskRow): GradingTaskResultEnvelope {
+    return buildTaskResultEnvelope({
+        task_uuid: row.task_uuid,
+        status: row.status,
+        essayType: row.essay_type,
+        inputMethod: row.input_method,
+        summaryTitle: normalizeSummaryTitle(row.summary_title || undefined, row.task_uuid, row.status),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        topic: row.topic || undefined,
+        originalContent: row.original_content || undefined,
+        transcription: row.transcription || undefined,
+        report: parseTaskReport(row),
+        errorMessage: row.error_message || undefined,
+    });
+}
+
+async function acquireUserTaskLock(db: D1Database, userId: number, taskUuid: string, now: number) {
+    const result = await db.prepare(
+        'INSERT OR IGNORE INTO task_user_locks (user_id, task_uuid, locked_at) VALUES (?, ?, ?)'
+    ).bind(userId, taskUuid, now).run();
+
+    return Number(result.meta?.changes || 0) > 0;
+}
+
+async function releaseUserTaskLock(db: D1Database, userId: number, taskUuid: string) {
+    await db.prepare('DELETE FROM task_user_locks WHERE user_id = ? AND task_uuid = ?').bind(userId, taskUuid).run();
+}
+
+async function updateTaskStatus(db: D1Database, taskUuid: string, status: TaskStatus, extra?: Record<string, unknown>) {
+    const now = Math.floor(Date.now() / 1000);
+    const fields = ['status = ?', 'updated_at = ?'];
+    const values: unknown[] = [status, now];
+
+    if (extra) {
+        for (const [key, value] of Object.entries(extra)) {
+            fields.push(`${key} = ?`);
+            values.push(value);
+        }
+    }
+
+    values.push(taskUuid);
+    await db.prepare(`UPDATE grading_tasks SET ${fields.join(', ')} WHERE task_uuid = ?`).bind(...values).run();
+}
+
+async function generateSummaryTitle(apiUrl: string, type: EssayType, questionText: string, essayText: string) {
+    const data = await runGeminiRequest(apiUrl, {
+        contents: [{
+            role: 'user',
+            parts: [{ text: buildSummaryTitlePrompt(type, questionText, essayText) }],
+        }],
+        generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 96,
+        },
+    });
+
+    return extractCandidateText(data.candidates?.[0]).trim().replace(/^["'\s]+|["'\s]+$/g, '');
+}
+
+async function runGeminiRequest(apiUrl: string, body: unknown): Promise<any> {
+    const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Gemini API Error ${response.status}: ${errorText}`);
+    }
+
+    return response.json() as any;
+}
+
+async function transcribeSingleImage(
+    apiUrl: string,
+    prompt: string,
+    image: InlineImagePart,
+    pageIndex = 0,
+    pageCount = 1
+): Promise<string> {
+    const data = await runGeminiRequest(apiUrl, {
+        contents: [{
+            role: 'user',
+            parts: [
+                {
+                    text: pageCount > 1
+                        ? `${prompt}\n\nThis is page ${pageIndex + 1} of ${pageCount}. Transcribe only this page and keep the natural reading order.`
+                        : prompt,
+                },
+                ...buildInlineParts([image]),
+            ],
+        }],
+        generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 3072,
+        },
+    });
+
+    return extractCandidateText(data.candidates?.[0]).trim();
+}
+
+async function transcribeImages(
+    apiUrl: string,
+    prompt: string,
+    inlineImages: InlineImagePart[] = [],
+    imageFiles: File[] = []
+): Promise<string> {
+    const sources: Array<() => Promise<InlineImagePart>> = [
+        ...inlineImages.map((image) => async () => image),
+        ...imageFiles.map((file) => async () => fileToInlineImagePart(file)),
+    ];
+
+    if (!sources.length) return '';
+
+    const pages: string[] = [];
+
+    for (let index = 0; index < sources.length; index++) {
+        const image = await sources[index]();
+        const pageText = await transcribeSingleImage(apiUrl, prompt, image, index, sources.length);
+        if (pageText) {
+            pages.push(pageText);
+        }
+    }
+
+    return pages.join('\n\n');
+}
+
+async function processQueuedTask(message: QueueTaskMessage, env: Env, ctx: ExecutionContext) {
+    const now = Math.floor(Date.now() / 1000);
+    const lockAcquired = await acquireUserTaskLock(env.DB, message.user_id, message.task_uuid, now);
+
+    if (!lockAcquired) {
+        return { shouldRetry: true };
+    }
+
+    try {
+        await updateTaskStatus(env.DB, message.task_uuid, 'processing', {
+            error_message: null,
+        });
+
+        const payload = await loadTaskPayload(env, message.payload_r2_key);
+        const apiKey = env.API_KEY;
+        if (!apiKey) {
+            throw new Error('API_KEY not configured');
+        }
+
+        const modelName = env.MODEL_NAME || 'gemini-3-pro-preview';
+        const apiUrl = `https://${env.API_DOMAIN || 'generativelanguage.googleapis.com'}/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+
+        let finalQuestionText = (payload.questionText || '').trim();
+        let finalEssayContent = (payload.essayContent || '').trim();
+        let transcription = finalEssayContent;
+
+        if (payload.method === InputMethod.IMAGE) {
+            if (!payload.essayImages.length) {
+                throw new Error('No essay images provided');
+            }
+
+            const [questionOcr, essayOcr] = await Promise.all([
+                payload.questionImages.length
+                    ? transcribeImages(apiUrl, QUESTION_OCR_PROMPT, payload.questionImages)
+                    : Promise.resolve(''),
+                transcribeImages(apiUrl, ESSAY_OCR_PROMPT, payload.essayImages),
+            ]);
+
+            if (!finalQuestionText) finalQuestionText = questionOcr.trim();
+            finalEssayContent = essayOcr.trim();
+            transcription = finalEssayContent;
+        }
+
+        if (!finalEssayContent) {
+            throw new Error('No essay content available for grading');
+        }
+
+        const gradingPayload = {
+            systemInstruction: {
+                parts: [{ text: buildStructuredSystemPrompt(payload.type) }],
+            },
+            contents: [{
+                role: 'user',
+                parts: [{
+                    text: buildStructuredUserPrompt(payload.type, finalQuestionText, finalEssayContent),
+                }],
+            }],
+            generationConfig: {
+                temperature: 0.35,
+                maxOutputTokens: payload.type === EssayType.PRACTICAL ? 10240 : 12288,
+                responseMimeType: 'application/json',
+            },
+        };
+
+        const data = await runGeminiRequest(apiUrl, gradingPayload);
+        const mergedResponses: string[] = [];
+        let latestCandidate = data.candidates?.[0];
+        let finishReason = latestCandidate?.finishReason || null;
+        let totalTokenCount = data.usageMetadata?.totalTokenCount || 0;
+
+        if (latestCandidate) {
+            const initialText = extractCandidateText(latestCandidate);
+            if (initialText) mergedResponses.push(initialText);
+        }
+
+        let truncated = isTruncatedCandidate(latestCandidate);
+        let continuationCount = 0;
+
+        while (truncated && continuationCount < 2) {
+            continuationCount++;
+
+            const continuationPayload = {
+                ...gradingPayload,
+                contents: [
+                    ...(gradingPayload.contents || []),
+                    { role: 'model', parts: [{ text: mergedResponses.join('') }] },
+                    { role: 'user', parts: [{ text: GRADE_CONTINUE_PROMPT }] },
+                ],
+            };
+
+            const continuationData = await runGeminiRequest(apiUrl, continuationPayload);
+            latestCandidate = continuationData.candidates?.[0];
+            finishReason = latestCandidate?.finishReason || finishReason;
+            totalTokenCount += continuationData.usageMetadata?.totalTokenCount || 0;
+
+            const continuationText = extractCandidateText(latestCandidate);
+            if (!continuationText) break;
+
+            mergedResponses.push(continuationText);
+            truncated = isTruncatedCandidate(latestCandidate);
+        }
+
+        const combinedResponseText = mergedResponses.join('');
+        const report = parseStructuredReport(combinedResponseText);
+        if (!report) {
+            throw new Error('Failed to parse structured grading report');
+        }
+
+        const summaryTitle = normalizeSummaryTitle(
+            await generateSummaryTitle(apiUrl, payload.type, finalQuestionText, finalEssayContent),
+            payload.task_uuid,
+            'successful'
+        );
+        const storedFeedback = reportToStoredFeedback(report);
+        const timestamp = Math.floor(Date.now() / 1000);
+
+        await updateTaskStatus(env.DB, payload.task_uuid, 'successful', {
+            summary_title: summaryTitle,
+            topic: finalQuestionText || summaryTitle,
+            original_content: transcription,
+            transcription,
+            report_json: storedFeedback,
+            error_message: null,
+            payload_r2_key: null,
+        });
+
+        await env.DB.prepare(
+            'INSERT INTO history (user_id, timestamp, topic, original_content, feedback, task_uuid) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(
+            payload.user_id,
+            timestamp,
+            summaryTitle,
+            transcription,
+            storedFeedback,
+            payload.task_uuid
+        ).run();
+
+        const historyRow = await env.DB.prepare(
+            'SELECT id FROM history WHERE task_uuid = ?'
+        ).bind(payload.task_uuid).first<{ id: number }>();
+
+        await env.DB.prepare(
+            'UPDATE grading_tasks SET history_id = ?, updated_at = ? WHERE task_uuid = ?'
+        ).bind(historyRow?.id || null, timestamp, payload.task_uuid).run();
+
+        const estimatedTokens = totalTokenCount ||
+            Math.ceil((JSON.stringify(gradingPayload).length + storedFeedback.length + transcription.length) / 4);
+
+        ctx.waitUntil(Promise.all([
+            env.DB.prepare('INSERT INTO usage_logs (user_id, timestamp, action_type, tokens) VALUES (?, ?, ?, ?)')
+                .bind(payload.user_id, timestamp, 'grade_success', estimatedTokens).run(),
+            payload.user_uuid ? consumeQuota(payload.user_uuid, estimatedTokens, env) : Promise.resolve(),
+        ]));
+
+        await env.R2.delete(message.payload_r2_key);
+
+        return { shouldRetry: false, finishReason, continuationCount, truncated };
+    } catch (error: any) {
+        const failedAt = Math.floor(Date.now() / 1000);
+        await updateTaskStatus(env.DB, message.task_uuid, 'failed', {
+            summary_title: normalizeSummaryTitle('', message.task_uuid, 'failed'),
+            error_message: String(error?.message || 'Task processing failed').slice(0, 1000),
+            payload_r2_key: null,
+        });
+
+        ctx.waitUntil(
+            env.DB.prepare('INSERT INTO usage_logs (user_id, timestamp, action_type, error_details) VALUES (?, ?, ?, ?)')
+                .bind(message.user_id, failedAt, 'grade_error', String(error?.message || 'Queue processing failed').slice(0, 200)).run()
+        );
+
+        await env.R2.delete(message.payload_r2_key).catch(() => undefined);
+
+        return { shouldRetry: false };
+    } finally {
+        await releaseUserTaskLock(env.DB, message.user_id, message.task_uuid);
+    }
 }
 
 // ─── Main fetch handler ──────────────────────────────────────────────────────
@@ -194,6 +704,8 @@ export default {
             });
 
         try {
+            await ensureUsersTable(env.DB);
+            await ensureTaskTables(env.DB);
 
             // ══════════════════════════════════════════════════════════════════
             // SSO Callback — frontend posts the JWT token here after redirect
@@ -391,8 +903,21 @@ export default {
                     }
                 }
 
-                const body = await request.json() as any;
-                const { payload, meta } = body;
+                const body = await parseGradeEssayBody(request);
+                const {
+                    type,
+                    method,
+                    questionText = '',
+                    essayContent = '',
+                    questionImages = [],
+                    essayImages = [],
+                    questionImageFiles = [],
+                    essayImageFiles = [],
+                } = body;
+
+                if (type !== EssayType.PRACTICAL && type !== EssayType.CONTINUATION) {
+                    return jsonResponse({ error: 'Invalid essay type' }, 400);
+                }
 
                 const apiKey = env.API_KEY;
                 if (!apiKey) return jsonResponse({ error: 'API_KEY not configured' }, 500);
@@ -400,24 +925,65 @@ export default {
                 const modelName = env.MODEL_NAME || 'gemini-3-pro-preview';
                 const apiUrl = `https://${env.API_DOMAIN || 'generativelanguage.googleapis.com'}/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
+                let finalQuestionText = questionText.trim();
+                let finalEssayContent = essayContent.trim();
+                let transcription = finalEssayContent;
 
-                if (!response.ok) {
-                    const errorText = await response.text();
+                try {
+                    if (method === 'IMAGE') {
+                        if (!essayImages.length && !essayImageFiles.length) {
+                            return jsonResponse({ error: 'No essay images provided' }, 400);
+                        }
+
+                        const [questionOcr, essayOcr] = await Promise.all([
+                            questionImages.length || questionImageFiles.length
+                                ? transcribeImages(apiUrl, QUESTION_OCR_PROMPT, questionImages, questionImageFiles)
+                                : Promise.resolve(''),
+                            transcribeImages(apiUrl, ESSAY_OCR_PROMPT, essayImages, essayImageFiles),
+                        ]);
+
+                        if (!finalQuestionText) finalQuestionText = questionOcr.trim();
+                        finalEssayContent = essayOcr.trim();
+                        transcription = finalEssayContent;
+                    }
+                } catch (ocrError: any) {
+                    return jsonResponse({ error: 'Failed to transcribe uploaded images', details: ocrError?.message }, 500);
+                }
+
+                if (!finalEssayContent) {
+                    return jsonResponse({ error: 'No essay content available for grading' }, 400);
+                }
+
+                const gradingPayload = {
+                    systemInstruction: {
+                        parts: [{ text: buildStructuredSystemPrompt(type) }],
+                    },
+                    contents: [{
+                        role: 'user',
+                        parts: [{
+                            text: buildStructuredUserPrompt(type, finalQuestionText, finalEssayContent),
+                        }],
+                    }],
+                    generationConfig: {
+                        temperature: 0.35,
+                        maxOutputTokens: type === EssayType.PRACTICAL ? 10240 : 12288,
+                        responseMimeType: 'application/json',
+                    },
+                };
+
+                let data: any;
+                try {
+                    data = await runGeminiRequest(apiUrl, gradingPayload);
+                } catch (apiError: any) {
                     const now = Math.floor(Date.now() / 1000);
                     const dbId = await getOrCreateUserId(env.DB, sso.uuid || '');
                     ctx.waitUntil(
                         env.DB.prepare('INSERT INTO usage_logs (user_id, timestamp, action_type, error_details) VALUES (?, ?, ?, ?)')
-                            .bind(dbId, now, 'grade_error', `API Error ${response.status}: ${errorText.substring(0, 200)}`).run()
+                            .bind(dbId, now, 'grade_error', String(apiError?.message || 'Gemini request failed').substring(0, 200)).run()
                     );
-                    return jsonResponse({ error: `Gemini API Error: ${response.status}`, details: errorText }, response.status);
+                    return jsonResponse({ error: 'Gemini API Error', details: apiError?.message }, 500);
                 }
 
-                const data = await response.json() as any;
                 const mergedResponses: string[] = [];
                 let latestData = data;
                 let latestCandidate = data.candidates?.[0];
@@ -436,27 +1002,16 @@ export default {
                     continuationCount++;
 
                     const continuationPayload = {
-                        ...payload,
+                        ...gradingPayload,
                         contents: [
-                            ...(payload.contents || []),
+                            ...(gradingPayload.contents || []),
                             { role: 'model', parts: [{ text: mergedResponses.join('') }] },
                             { role: 'user', parts: [{ text: GRADE_CONTINUE_PROMPT }] },
                         ],
                     };
 
                     try {
-                        const continuationResponse = await fetch(apiUrl, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(continuationPayload),
-                        });
-
-                        if (!continuationResponse.ok) {
-                            console.warn('Gemini continuation failed with status:', continuationResponse.status);
-                            break;
-                        }
-
-                        const continuationData = await continuationResponse.json() as any;
+                        const continuationData = await runGeminiRequest(apiUrl, continuationPayload);
                         latestData = continuationData;
                         latestCandidate = continuationData.candidates?.[0];
                         finishReason = latestCandidate?.finishReason || finishReason;
@@ -474,13 +1029,20 @@ export default {
                 }
 
                 const combinedResponseText = mergedResponses.join('');
-                const parsedResult = splitTranscriptionAndFeedback(combinedResponseText, meta?.originalContent || '');
-                let feedbackText = parsedResult.feedbackText;
-                const transcribedContent = parsedResult.transcribedContent;
-
-                if (truncated) {
-                    feedbackText = `${feedbackText}\n\n> Note: The AI response may still be incomplete because it reached the model output limit.`;
+                const report = parseStructuredReport(combinedResponseText);
+                if (!report) {
+                    return jsonResponse({
+                        error: 'Failed to parse structured grading report',
+                        raw: combinedResponseText.slice(0, 4000),
+                    }, 500);
                 }
+
+                const storedFeedback = reportToStoredFeedback(report);
+                const markdown = reportToMarkdown(report, {
+                    topic: finalQuestionText || 'Essay Grading',
+                    originalContent: transcription,
+                    date: new Date().toISOString().slice(0, 10),
+                });
 
                 const now = Math.floor(Date.now() / 1000);
                 const dbId = await getOrCreateUserId(env.DB, sso.uuid || '');
@@ -488,11 +1050,11 @@ export default {
                 // Save history synchronously (user needs it)
                 await env.DB.prepare(
                     'INSERT INTO history (user_id, timestamp, topic, original_content, feedback) VALUES (?, ?, ?, ?, ?)'
-                ).bind(dbId, now, meta?.topic || '', transcribedContent, feedbackText).run();
+                ).bind(dbId, now, finalQuestionText || 'Essay Grading', transcription, storedFeedback).run();
 
                 // Estimate tokens
                 const estimatedTokens = totalTokenCount ||
-                    Math.ceil((JSON.stringify(payload).length + feedbackText.length) / 4);
+                    Math.ceil((JSON.stringify(gradingPayload).length + storedFeedback.length + transcription.length) / 4);
 
                 // Async: log usage + consume quota (fire-and-forget)
                 ctx.waitUntil(Promise.all([
@@ -503,8 +1065,10 @@ export default {
 
                 return jsonResponse({
                     ...latestData,
-                    feedback: feedbackText,
-                    transcription: transcribedContent,
+                    report,
+                    feedback: storedFeedback,
+                    markdown,
+                    transcription,
                     finishReason,
                     truncated,
                     continuationCount,

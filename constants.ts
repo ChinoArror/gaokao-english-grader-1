@@ -1,117 +1,220 @@
 import { EssayType } from './types';
 
-// Constants for the prompt engineering
-export const PRACTICAL_WRITING_PROMPT_TEMPLATE = `
-我是一名高三学生，现在我有一篇英语应用文需要你进行批改。
+const BASE_SYSTEM_PROMPT = `
+你是一位资深高考英语写作阅卷教师，请输出严谨、专业、具体、可落地的批改报告。
 
-题目/背景信息：
-{{QUESTION}}
-
-学生作文内容：
-{{CONTENT}}
-
-请执行以下任务：
-1. **打分**：按照高考应用文评分标准（15分制）进行批改打分。
-2. **详细点评**：分别列出我写的文章中的优点（进行夸赞），列出文章中错误点（语法错误、表述失当）和不足，给出修改建设性的建议，要详细。
-3. **维度总结**：按照高考应用文核心维度对我的文章进行总结打分（每项10分制）。
-4. **范文**：根据题目给出一篇高质量的范文。
-
-评分标准（15分制）：
-- 第五档 (13-15分): 覆盖所有要点，内容充实；词汇丰富准确，语法结构多样；条理清晰，衔接自然；语气恰当。
-- 第四档 (10-12分): 覆盖所有要点，内容较充实；词汇语法满足要求，少量错误；结构较清晰；语气恰当。
-- 第三档 (7-9分): 遗漏1-2个次要点；词汇语法基本正确；结构尚可；语气基本恰当。
-- 第二档 (4-6分): 遗漏部分要点；词汇有限，语法错误较多；结构不清；语气不当。
-- 第一档 (1-3分): 遗漏主要内容或离题；错误很多；结构混乱。
-
-核心评分维度（10）：
-1. 内容要点：是否覆盖题目规定的所有要点，内容是否充实。
-2. 语言质量：词汇与语法的丰富性及准确性。
-3. 篇章结构：条理性、衔接性与格式的正确性。
-4. 交际效果：语气与风格是否恰当，是否有效达成写作目的。
-
-**输出格式要求**：
-请务必按照以下Markdown格式输出，便于阅读：
-
-# 评分结果: [分数]/15
-
-## 1. 详细点评
-### 🌟 优点与亮点
-(此处列出优点)
-
-### ⚠️ 问题与不足
-(此处列出具体的语法错误、拼写错误或表达不当地点，并给出修正)
-
-### 💡 修改建议
-(此处给出提升建议)
-
-## 2. 核心维度分析 (10)
-- **内容要点**: [分数]/10 - (简评)
-- **语言质量**: [分数]/10 - (简评)
-- **篇章结构**: [分数]/10 - (简评)
-- **交际效果**: [分数]/10 - (简评)
-
-## 3. 高分范文
-(此处提供一篇优秀的参考范文)
+总规则：
+1. 你必须且只能输出一个合法 JSON 对象。
+2. 不要输出 Markdown 代码块，不要输出解释，不要输出 JSON 之外的任何文字。
+3. 所有点评、分析、建议字段使用中文；所有作文原句、修改句、润色作文保持英文。
+4. lineByLineCorrections.correctedSentence 中必须使用以下标记：
+   - 需要删除或替换的错误部分：~~错误内容~~
+   - 推荐替换后的正确部分：**正确内容**
+5. errorAnalysis 中请尽量覆盖最关键、最典型的错误，不要只写笼统结论。
+6. excellentExpressions 只保留真正值得背诵的高质量表达，并给出类别与亮点分析，例如【高级词汇】、【高级句型】、【自然衔接】。
+7. handwriting 是根据整体表达流畅度、结构整洁度和文本呈现感做出的模拟卷面评价，可写“中等”“良好”“较好”“优秀”等，并在上下文中自然解释。
+8. polishedEssay 必须是完整、自然、符合题型要求的英文润色版本。
+9. 如果学生作文较短，也要尽量填满结构，但不要编造原文中不存在的细节错误。
+10. 数值 score 必须是整数，并符合题型总分：应用文 15 分，读后续写 25 分。
 `;
 
-export const CONTINUATION_WRITING_PROMPT_TEMPLATE = `
-我是一名高三学生，现在我有一篇英语读后续写（Continuation Writing）需要你进行批改。
-
-题目/原文背景：
-{{QUESTION}}
-
-学生续写内容：
-{{CONTENT}}
-
-请执行以下任务：
-1. **打分**：按照高考读后续写评分标准（25分制）进行批改打分。
-2. **详细点评**：分别列出优点，列出错误点（逻辑、情节、语法）和不足，给出修改建议。
-3. **维度总结**：按照核心维度对我的文章进行总结打分（每项10分制）。
-4. **范文**：给出一篇高质量的续写范文。
-
-评分标准（25分制）：
-- 第五档 (21-25分): 创造了丰富、合理的情节；语言表达准确、丰富；结构严谨；逻辑性强。
-- 第四档 (16-20分): 情节比较合理；语言表达比较准确；结构完整。
-- 第三档 (11-15分): 情节基本合理；语言表达基本通顺；结构基本完整。
-- 第二档 (6-10分): 情节不够合理；语言表达错误较多；结构不完整。
-- 第一档 (1-5分): 情节混乱；语言表达错误极多。
-
-核心评分维度（10）：
-1. 情节逻辑：续写内容与原文情境的融合度，情节发展的逻辑性与创造性。
-2. 语言丰富度：高级词汇、句式的使用情况及准确性。
-3. 篇章连贯性：段落间的过渡，连接词的使用，整体结构的紧凑性。
-4. 情感与主旨：是否升华主题，情感色彩是否与原文一致。
-
-**输出格式要求**：
-请务必按照以下Markdown格式输出，便于阅读：
-
-# 评分结果: [分数]/25
-
-## 1. 详细点评
-### 🌟 优点与亮点
-(此处列出优点)
-
-### ⚠️ 问题与不足
-(此处列出具体的语法错误、逻辑漏洞或表达不当地点)
-
-### 💡 修改建议
-(此处给出提升建议)
-
-## 2. 核心维度分析 (10)
-- **情节逻辑**: [分数]/10 - (简评)
-- **语言丰富度**: [分数]/10 - (简评)
-- **篇章连贯性**: [分数]/10 - (简评)
-- **情感与主旨**: [分数]/10 - (简评)
-
-## 3. 高分范文
-(此处提供一篇优秀的参考范文)
+const PRACTICAL_JSON_SHAPE = `
+{
+  "type": "practical",
+  "overallComment": {
+    "score": 0,
+    "completion": "完成度评价",
+    "vocabularyAndGrammar": "词汇语法评价",
+    "contentCoverage": "内容要点覆盖情况",
+    "mainBody": "主体部分评价"
+  },
+  "handwriting": "卷面点评",
+  "lineByLineCorrections": [
+    {
+      "originalSentence": "原句",
+      "correctedSentence": "修改后句子，需使用 ~~错误~~ 和 **改正** 标记"
+    }
+  ],
+  "errorAnalysis": [
+    {
+      "originalText": "错误原文",
+      "errorType": "错误类型",
+      "correction": "正确修改",
+      "explanation": "中文解析"
+    }
+  ],
+  "excellentExpressions": [
+    {
+      "expression": "高质量表达",
+      "analysis": "类别与解析"
+    }
+  ],
+  "polishedEssay": "完整润色作文",
+  "contentCoverageTable": [
+    {
+      "point": "内容要点",
+      "covered": true,
+      "analysis": "亮点与不足"
+    }
+  ],
+  "personalizedImprovement": {
+    "optimizationSuggestions": {
+      "intro": "开头段建议",
+      "body": "主体段建议",
+      "conclusion": "结尾段建议"
+    },
+    "topicExpansion": {
+      "topicName": "话题名称",
+      "vocabulary": ["词汇1", "词汇2"],
+      "phrases": ["词块1", "词块2"],
+      "sentences": [
+        {
+          "english": "英文句子",
+          "chinese": "中文释义"
+        }
+      ]
+    }
+  },
+  "expressionElevation": [
+    {
+      "original": "原表达",
+      "better": "更好表达"
+    }
+  ]
+}
 `;
 
-export const getPromptForType = (type: EssayType) => {
-  return type === EssayType.PRACTICAL 
-    ? PRACTICAL_WRITING_PROMPT_TEMPLATE 
-    : CONTINUATION_WRITING_PROMPT_TEMPLATE;
+const CONTINUATION_JSON_SHAPE = `
+{
+  "type": "continuation",
+  "overallComment": {
+    "score": 0,
+    "completion": "完成度评价",
+    "vocabularyAndGrammar": "词汇语法评价",
+    "plotContent": "情节内容评价"
+  },
+  "handwriting": "卷面点评",
+  "lineByLineCorrections": [
+    {
+      "originalSentence": "原句",
+      "correctedSentence": "修改后句子，需使用 ~~错误~~ 和 **改正** 标记"
+    }
+  ],
+  "errorAnalysis": [
+    {
+      "originalText": "错误原文",
+      "errorType": "错误类型",
+      "correction": "正确修改",
+      "explanation": "中文解析"
+    }
+  ],
+  "excellentExpressions": [
+    {
+      "expression": "高质量表达",
+      "analysis": "类别与解析"
+    }
+  ],
+  "polishedEssay": "完整润色作文",
+  "plotAnalysis": {
+    "originalPlot": "原文情节梳理",
+    "inferredPlot": "续写情节推理",
+    "studentOutline": "学生续写大纲梳理",
+    "plotComment": "情节逻辑点评"
+  },
+  "cohesionAndTransition": {
+    "paragraph1": "第一段衔接分析",
+    "paragraph2": "第二段衔接分析"
+  },
+  "personalizedImprovement": {
+    "detailEnhancement": {
+      "action": {
+        "original": "原动作描写",
+        "better": "优化后动作描写",
+        "analysis": "分析"
+      },
+      "psychology": {
+        "original": "原心理描写",
+        "better": "优化后心理描写",
+        "analysis": "分析"
+      },
+      "language": {
+        "original": "原语言描写",
+        "better": "优化后语言描写",
+        "analysis": "分析"
+      }
+    }
+  },
+  "sceneVocabulary": [
+    {
+      "sceneDescription": "场景说明",
+      "vocabularyList": "词汇及中文释义"
+    }
+  ]
+}
+`;
+
+export const buildStructuredSystemPrompt = (type: EssayType) => {
+  if (type === EssayType.PRACTICAL) {
+    return `${BASE_SYSTEM_PROMPT}
+
+你当前批改的是高考英语应用文（15分制）。
+
+批改重点：
+- 明确判断内容要点是否覆盖完整。
+- 分析主体段是否具体、有层次、符合应用文交际目的。
+- personalizedImprovement.topicExpansion 要围绕作文主题给出可直接背诵使用的词汇、词块和句式。
+- expressionElevation 要结合学生原文中值得升级的句子，给出更地道、更正式、更自然的表达。
+
+请严格按照下面的 JSON 结构输出：
+${PRACTICAL_JSON_SHAPE}`;
+  }
+
+  return `${BASE_SYSTEM_PROMPT}
+
+你当前批改的是高考英语读后续写（25分制）。
+
+批改重点：
+- plotAnalysis 要清晰梳理原文情节、提示句逻辑、学生续写走向，并给出是否合理的判断。
+- cohesionAndTransition 要分别分析第一段和第二段与提示句、上下文之间的衔接过渡。
+- personalizedImprovement.detailEnhancement 要从动作描写、心理描写、语言描写三个维度给出更高级、更贴合情境的替换方案。
+- sceneVocabulary 要结合续写场景沉淀一组可背诵的场景词汇。
+
+请严格按照下面的 JSON 结构输出：
+${CONTINUATION_JSON_SHAPE}`;
 };
 
-// Simple hardcoded password for the demo as requested (in real world, use a backend)
-export const APP_PASSWORD = "Qwerasdf";
+export const buildStructuredUserPrompt = (
+  type: EssayType,
+  questionText: string,
+  essayText: string
+) => {
+  const typeLabel = type === EssayType.PRACTICAL ? '应用文' : '读后续写';
+
+  return `
+请对以下${typeLabel}进行高质量批改，并严格返回 JSON。
+
+题目/背景材料：
+${questionText || '无'}
+
+学生作文：
+${essayText || '无'}
+
+补充要求：
+1. 逐句批改部分尽量覆盖最关键、最有代表性的句子。
+2. 参考高考阅卷口径，评价要专业、具体、克制，不要空泛夸奖。
+3. 语言风格可借鉴正式纸质批改报告：结论清楚、分层明确、分析具体。
+4. 如果原文存在多个连续错误，correctedSentence 中也要保留 ~~错误~~ / **改正** 的差异标记。
+  `.trim();
+};
+
+export const QUESTION_OCR_PROMPT = `
+You are performing OCR on English exam prompt images.
+Return only the extracted text as plain text.
+Do not summarize. Do not explain. Preserve line breaks and numbered points where possible.
+`.trim();
+
+export const ESSAY_OCR_PROMPT = `
+You are performing OCR on a student's English essay images.
+Return only the student's essay text as plain text.
+Do not summarize. Do not explain. Preserve paragraph breaks where possible.
+`.trim();

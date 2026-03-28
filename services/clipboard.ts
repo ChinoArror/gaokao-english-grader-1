@@ -1,4 +1,4 @@
-export const copyTextAsMarkdown = async (text: string): Promise<void> => {
+export const copyText = async (text: string): Promise<void> => {
     if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
         return;
@@ -20,3 +20,5 @@ export const copyTextAsMarkdown = async (text: string): Promise<void> => {
         throw new Error('Copy failed');
     }
 };
+
+export const copyTextAsMarkdown = copyText;

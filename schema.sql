@@ -30,7 +30,34 @@ CREATE TABLE history (
   topic TEXT,
   original_content TEXT,
   feedback TEXT,
+  task_uuid TEXT UNIQUE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE grading_tasks (
+  task_uuid TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  essay_type TEXT NOT NULL,
+  input_method TEXT NOT NULL,
+  summary_title TEXT,
+  topic TEXT,
+  original_content TEXT,
+  transcription TEXT,
+  report_json TEXT,
+  error_message TEXT,
+  payload_r2_key TEXT,
+  history_id INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (history_id) REFERENCES history(id) ON DELETE SET NULL
+);
+
+CREATE TABLE task_user_locks (
+  user_id INTEGER PRIMARY KEY,
+  task_uuid TEXT NOT NULL,
+  locked_at INTEGER NOT NULL
 );
 
 -- Session management
@@ -44,4 +71,6 @@ CREATE TABLE sessions (
 
 -- Create indexes for better performance
 CREATE INDEX idx_history_user_id ON history(user_id);
+CREATE INDEX idx_grading_tasks_user_created_at ON grading_tasks(user_id, created_at DESC);
+CREATE INDEX idx_grading_tasks_status_created_at ON grading_tasks(status, created_at DESC);
 CREATE INDEX idx_sessions_expires ON sessions(expires_at);

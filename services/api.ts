@@ -1,4 +1,4 @@
-import { HistoryRecord, UsageStat } from '../types';
+import { GradeEssayRequest, GradeEssayResponse, GradingTaskResultEnvelope, HistoryRecord, UsageStat } from '../types';
 
 const API_BASE = '/api';
 
@@ -14,12 +14,15 @@ function getAuthToken(): string | null {
 async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
     const token = getAuthToken();
     const headers = new Headers(options.headers);
+    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
 
     if (token) {
         headers.set('Authorization', `Bearer ${token}`);
     }
 
-    headers.set('Content-Type', 'application/json');
+    if (!isFormData) {
+        headers.set('Content-Type', 'application/json');
+    }
 
     return fetch(url, { ...options, headers });
 }
@@ -117,8 +120,8 @@ export const api = {
         return data.history || [];
     },
 
-    async deleteHistory(historyId: number): Promise<{ success: boolean }> {
-        const response = await authFetch(`${API_BASE}/history/${historyId}`, {
+    async deleteHistory(taskUuid: string): Promise<{ success: boolean }> {
+        const response = await authFetch(`${API_BASE}/history/${taskUuid}`, {
             method: 'DELETE',
         });
         return await response.json() as any;
@@ -126,15 +129,15 @@ export const api = {
 
     // ── Grade essay ───────────────────────────────────────────────────────────
 
-    async gradeEssay(payload: any, meta: { topic: string; originalContent?: string; isImage?: boolean }): Promise<any> {
+    async gradeEssay(request: GradeEssayRequest | FormData, options?: { isImage?: boolean }): Promise<GradeEssayResponse> {
         let response: Response;
         try {
             response = await authFetch(`${API_BASE}/grade`, {
                 method: 'POST',
-                body: JSON.stringify({ payload, meta }),
+                body: request instanceof FormData ? request : JSON.stringify(request),
             });
         } catch (error: any) {
-            const suffix = meta.isImage
+            const suffix = options?.isImage
                 ? ' The image payload may be too large, or the network connection was interrupted.'
                 : ' The network connection was interrupted.';
             throw new Error(`Failed to reach the grading service.${suffix}`);
@@ -145,7 +148,25 @@ export const api = {
             throw new Error(error.message || error.details || error.error || 'Failed to grade essay');
         }
 
-        return await response.json();
+        return await response.json() as GradeEssayResponse;
+    },
+
+    async getTask(taskUuid: string): Promise<GradingTaskResultEnvelope> {
+        const response = await authFetch(`${API_BASE}/tasks/${taskUuid}`);
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({})) as any;
+            throw new Error(error.error || error.message || 'Failed to load task');
+        }
+        return await response.json() as GradingTaskResultEnvelope;
+    },
+
+    async getLatestActiveTask(): Promise<GradingTaskResultEnvelope | null> {
+        const response = await authFetch(`${API_BASE}/tasks/latest-active`);
+        if (!response.ok) {
+            return null;
+        }
+        const data = await response.json() as any;
+        return data.task || null;
     },
 
     // ── Audio Listening ───────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 name = "gaokao-english-grader"
-main = "worker/index.ts"
+main = "worker/app.ts"
 compatibility_date = "2024-09-23"
 
 # Bind the static assets (the built React app)
@@ -34,4 +34,14 @@ ADMIN_USER_ID = "0"
 [[r2_buckets]]
 binding = "R2"
 bucket_name = "gaokao-english-server"
+
+[[queues.producers]]
+binding = "GRADING_QUEUE"
+queue = "gaokao-english-grader-tasks"
+
+[[queues.consumers]]
+queue = "gaokao-english-grader-tasks"
+max_batch_size = 1
+max_batch_timeout = 2
+max_retries = 5
 

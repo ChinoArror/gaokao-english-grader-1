@@ -1,267 +1,481 @@
-# 高考英语作文批改系统 - AI Essay Grading System
+﻿# 高考英语作文批改系统
 
 [English README](./README.md)
 
-这是一个面向高考英语场景的 AI 作文批改系统，支持用户管理、批改历史、使用统计、图片转写与作文批改等能力。
+这是一个基于 Cloudflare 的高考英语作文批改 Web App，支持应用文与读后续写两类题型，支持文本输入与图片上传，支持 OCR 识别、AI 结构化批改、任务队列后台处理、历史记录查看、JSON 导出与 A4 打印。
 
-## 功能特性
+当前系统已经升级为“任务队列化”架构：浏览器提交任务后，Cloudflare Queue 在后台继续处理，D1 保存任务状态与结果，即使用户刷新页面或临时离开，也不会中断批改流程。
 
-### 认证与用户管理
-- **多用户支持**：区分管理员和普通用户角色，并提供安全认证。
-- **管理员面板**：
-  - 管理用户，包括创建、更新和删除账号。
-  - **用户暂停**：可立即暂停或恢复用户访问，并强制已暂停用户退出登录。
-  - **使用统计**：通过日视图和月视图交互图表查看系统使用情况。
-- **会话管理**：基于令牌的安全认证，并支持自动持久化登录状态。
-- **密码保护**：用户密码使用 SHA-256 进行哈希存储。
+## 系统能力
 
-### 作文批改
-- **双输入方式**：
-  - 手动输入题目与作文正文。
-  - 上传图片，支持手写作文 OCR/转写。
-- **AI 批改**：由 Google Gemini 3.0 Pro Preview 提供能力支持。
-- **支持题型**：
-  - 应用文，15 分制。
-  - 读后续写，25 分制。
-- **转写功能**：自动提取上传图片中的文本，并通过悬浮查看器展示。
+- 支持两类作文题型：
+  - 应用文
+  - 读后续写
+- 支持两种输入方式：
+  - 文本输入
+  - 图片上传
+- Gemini 调用全部在后端执行：
+  - 前端不会直接请求 Gemini
+  - 实际模型调用发生在 Cloudflare Worker
+- 输出为结构化批改报告：
+  - 总评与分数
+  - 逐句批改
+  - 错误分析
+  - 出彩表达
+  - 作文润色
+  - 题型专属分析模块
+- 每次批改都会生成唯一 `task_uuid`
+- 支持任务状态追踪：
+  - `Queued`
+  - `Processing`
+  - `Successful`
+  - `Failed`
+- 支持历史记录：
+  - AI 生成的文章大意短标题
+  - `task_uuid`
+  - 题型标签
+  - 时间
+  - 删除操作
+- 支持结果操作：
+  - 下载 JSON
+  - 复制 JSON
+  - 打印 A4 PDF
 
-### 历史记录
-- **批改历史**：完整保存所有作文批改记录与时间戳。
-- **记录管理**：支持查看、导出、删除和复制历史记录。
-- **导出方式**：
-  - 下载为 Markdown（`.md`）。
-  - 打印友好格式。
-  - 直接复制 Markdown 文本。
-- **按用户隔离**：普通用户只能看到自己的记录，管理员可以查看全部记录。
-
-### 用户体验
-- **单页应用路由**：前端路由切换快速流畅。
-- **响应式设计**：适配移动端与桌面端。
-- **现代化界面**：采用玻璃拟态风格，带平滑动画与过渡效果。
-- **实时反馈**：提供加载状态与清晰的错误提示。
-- **悬浮转写查看器**：无需打断主流程即可查看 OCR 结果。
-
-## 技术栈
+## 项目结构
 
 ### 前端
-- **React 19** + TypeScript
-- **React Router DOM** 用于前端路由
-- **Recharts** 用于数据可视化
-- **Tailwind CSS** 用于样式
-- **Marked.js** 用于 Markdown 渲染
-- **Vite** 用于构建
+
+- React + TypeScript + Vite
+- 主批改页面：
+  - [components/EssayGraderV2.tsx](/D:/Code/gaokao-english-grader/components/EssayGraderV2.tsx)
+- 历史记录页面：
+  - [components/HistoryPageV3.tsx](/D:/Code/gaokao-english-grader/components/HistoryPageV3.tsx)
+- 结构化报告渲染：
+  - [components/report/ReportRenderer.tsx](/D:/Code/gaokao-english-grader/components/report/ReportRenderer.tsx)
+- 前端 API 封装：
+  - [services/api.ts](/D:/Code/gaokao-english-grader/services/api.ts)
+- 图片压缩与提交：
+  - [services/geminiService.ts](/D:/Code/gaokao-english-grader/services/geminiService.ts)
+- 打印模板：
+  - [services/reportPrintV3.ts](/D:/Code/gaokao-english-grader/services/reportPrintV3.ts)
 
 ### 后端
-- **Cloudflare Workers** 提供无服务器计算能力
-- **D1 Database** 提供持久化存储
-- **Google Gemini 3.0** 提供 AI 批改能力
 
-## 安装
+- Cloudflare Worker 主入口：
+  - [worker/app.ts](/D:/Code/gaokao-english-grader/worker/app.ts)
+- 旧版 Worker 路由仍保留用于其他 API：
+  - [worker/index.ts](/D:/Code/gaokao-english-grader/worker/index.ts)
+- 结构化批改提示词：
+  - [promptsV2.ts](/D:/Code/gaokao-english-grader/promptsV2.ts)
 
-1. 克隆仓库：
-```bash
-git clone <repository-url>
-cd gaokao-english-grader
-```
+### 存储
 
-2. 安装依赖：
+- D1：
+  - `history`
+  - `grading_tasks`
+  - `task_user_locks`
+  - `usage_logs`
+  - `sessions`
+- R2：
+  - 暂存进入队列前的任务原始 payload
+- Queue：
+  - `gaokao-english-grader-tasks`
+
+## 批改流程
+
+### 文本提交流程
+
+1. 用户输入题目和作文正文。
+2. 前端调用 `POST /api/grade`。
+3. Worker 创建唯一 `task_uuid`。
+4. Worker 把任务原始数据写入 R2。
+5. Worker 在 `grading_tasks` 中写入一条 `queued` 记录。
+6. Worker 向 Cloudflare Queue 投递轻量消息。
+7. 前端展示任务状态并开始轮询。
+8. Queue 消费者在后台继续处理任务。
+9. 结果写入 D1，History 页面即可查看。
+
+### 图片提交流程
+
+1. 前端先压缩图片，减少上传体积。
+2. 图片通过 `multipart/form-data` 提交到 `POST /api/grade`。
+3. Worker 将任务写入 R2 并进入 Queue。
+4. Queue 消费者先执行 OCR。
+5. OCR 结果作为作文正文进入批改流程。
+6. Queue 消费者调用结构化批改 prompt 与总结标题 prompt。
+7. 最终把 OCR 文本、结构化报告、任务信息写入 D1。
+
+## 为什么要接入 Queue
+
+引入 Queue 主要是为了解决这些线上问题：
+
+- 图片任务较大，不能依赖前端页面一直保持打开
+- 页面刷新后任务不能丢
+- 同一用户的多个任务要按顺序处理
+- 模型调用必须放在后端，避免前端所在地区无法直接访问 Gemini 时失败
+
+当前系统通过 `task_user_locks` 保证同一用户任务串行处理。
+
+## 数据表说明
+
+### `history`
+
+用于保存成功任务的历史记录，兼容旧历史查看逻辑。
+
+主要字段：
+
+- `id`
+- `user_id`
+- `timestamp`
+- `topic`
+- `original_content`
+- `feedback`
+- `task_uuid`
+
+### `grading_tasks`
+
+这是当前任务系统的主表。
+
+主要字段：
+
+- `task_uuid`
+- `user_id`
+- `status`
+- `essay_type`
+- `input_method`
+- `summary_title`
+- `topic`
+- `original_content`
+- `transcription`
+- `report_json`
+- `error_message`
+- `payload_r2_key`
+- `history_id`
+- `created_at`
+- `updated_at`
+
+### `task_user_locks`
+
+用于保证同一用户任务按顺序消费。
+
+## 结构化输出
+
+模型不再输出自由文本 Markdown，而是按严格 JSON 结构返回批改结果。
+
+当前支持两类报告结构：
+
+- `PracticalWritingReport`
+- `ContinuationWritingReport`
+
+接口定义位于：
+
+- [types.ts](/D:/Code/gaokao-english-grader/types.ts)
+
+当前约束：
+
+- 历史记录中的标题只是列表摘要
+- 这个标题不会作为正式报告标题使用
+- 打印页使用题型对应的通用标题
+- 复制和下载的结果以 JSON 为准，不再以 Markdown 为主
+
+## OCR 与识别策略
+
+当前 OCR 链路做了多层防护：
+
+- 前端先压缩图片再上传
+- OCR 使用更高的输出 token 上限
+- OCR 被截断时，后端会自动续写补全
+- 多张图片按页分别识别，再合并结果
+
+这样做是因为读后续写图片内容较长时，模型容易只返回前半部分识别结果。
+
+## 报告展示与打印
+
+### 网页中的批改报告
+
+网页报告已经按不同设备做了适配：
+
+- 卡片布局可在手机和桌面端自适应
+- 表格支持窄屏滚动
+- `~~错误~~` 与 `**改正**` 会以 diff 风格显示
+- 应用文和读后续写分别渲染不同专属模块
+
+### PDF 打印
+
+打印页针对 A4 做了单独模板：
+
+- 不显示 Markdown 或 JSON 语法符号
+- 不显示班级、学号、姓名
+- 行距与字号相对收紧，更接近纸质批改样式
+- 正文和表格与网页端分开控制
+
+## 下载文件命名规则
+
+下载的 JSON 文件名格式如下：
+
+`username-文章类型-task_uuid前8位-YYYY-MM-DD.json`
+
+示例：
+
+`alice-续写-a1b2c3d4-2026-03-29.json`
+
+## History 页面说明
+
+History 左侧列表显示：
+
+- AI 总结的文章大意
+- 状态标签
+- 题型标签
+- UUID 短标签
+- 时间
+
+History 右侧详情显示：
+
+- 按题型生成的正式报告标题
+- 原文识别结果
+- AI 批改详情
+- JSON 下载
+- JSON 复制
+- PDF 打印
+
+删除按钮使用红色垃圾桶图标。
+
+## API 概览
+
+### 批改相关
+
+- `POST /api/grade`
+  - 创建任务并放入队列
+- `GET /api/tasks/:task_uuid`
+  - 获取单个任务状态或结果
+- `GET /api/tasks/latest-active`
+  - 页面刷新后恢复最近一个未完成任务
+
+### 历史相关
+
+- `GET /api/history`
+  - 返回任务视角的历史列表
+- `DELETE /api/history/:task_uuid`
+  - 删除某个任务/历史记录
+
+### 认证与管理
+
+其他认证、管理、音频相关接口仍由 Worker 提供，但作文批改主流程现在统一走 [worker/app.ts](/D:/Code/gaokao-english-grader/worker/app.ts) 中的队列化链路。
+
+## 环境准备
+
+### 必备条件
+
+- Node.js 18+
+- npm
+- Cloudflare 账号
+- Wrangler CLI
+- D1 数据库
+- R2 Bucket
+- Cloudflare Queue
+- 可用的 Gemini API 权限
+- 若沿用现有登录体系，还需要 Aryuki Auth Center 配置
+
+### 安装依赖
+
 ```bash
 npm install
 ```
 
-3. 初始化数据库：
+### 初始化数据库
+
+全新环境：
+
 ```bash
 npx wrangler d1 execute gaokao-en-grader-db --remote --file=schema.sql
 ```
 
-4. 在 `wrangler.toml` 或 Cloudflare Dashboard 中配置环境变量：
-- `API_KEY`：Google Gemini API Key，使用 secret 保存。
-- `API_DOMAIN`：Gemini API 域名，默认 `generativelanguage.googleapis.com`。
-- `MODEL_NAME`：作文批改模型，默认 `gemini-3-pro-preview`。
-- `LISTEN_MODEL_NAME`：听力任务模型。
-- `SSO_URL`：统一认证中心地址。
-- `SSO_APP_ID`：在 SSO 系统中的应用标识。
-- `SSO_SECRET_KEY`：后端进行配额与 SSO 调用时使用的密钥。
-- `ADMIN_USER_ID`：认证中心中的管理员用户 ID。
+已有环境升级到任务队列版本：
 
-5. 设置 API Key Secret：
 ```bash
-npx wrangler secret put API_KEY
-# 按提示输入你的 Gemini API Key
+npx wrangler d1 execute gaokao-en-grader-db --remote --file=migrate-grading-tasks.sql
 ```
 
-## 部署
+### 创建 Queue
 
-1. 构建前端：
+```bash
+npx wrangler queues create gaokao-english-grader-tasks
+```
+
+### 配置 Secret
+
+至少需要设置：
+
+```bash
+npx wrangler secret put API_KEY
+```
+
+同时请确认 [wrangler.toml](/D:/Code/gaokao-english-grader/wrangler.toml) 中以下绑定或变量存在并正确：
+
+- D1 绑定：`DB`
+- R2 绑定：`R2`
+- Queue 绑定：`GRADING_QUEUE`
+- 静态资源绑定：`ASSETS`
+- `API_DOMAIN`
+- `MODEL_NAME`
+- `LISTEN_MODEL_NAME`
+- `SSO_URL`
+- `SSO_APP_ID`
+- `SSO_SECRET_KEY`
+- `ADMIN_USER_ID`
+
+## 本地开发与部署
+
+### 本地开发
+
+```bash
+npm run dev
+```
+
+### 生产构建
+
 ```bash
 npm run build
 ```
 
-2. 部署到 Cloudflare Workers：
+### 部署到 Cloudflare
+
 ```bash
 npx wrangler deploy
 ```
 
-3. 访问地址：**https://eng.aryuki.com**
+## 使用指南
 
-## 使用方式
+### 普通用户操作流程
 
-### 管理员
+1. 通过现有 SSO 流程登录。
+2. 进入批改页面。
+3. 选择题型：
+   - 应用文
+   - 读后续写
+4. 选择输入方式：
+   - 文本
+   - 图片
+5. 提交任务。
+6. 查看任务状态：
+   - `Queued`
+   - `Processing`
+   - `Successful`
+   - `Failed`
+7. 随时进入 History 查看完成结果。
+8. 使用：
+   - `Copy JSON`
+   - `Download JSON`
+   - `PDF`
 
-1. **登录**：使用管理员凭证登录。
-2. **总览面板**：
-   - 查看请求数量与 token 用量的日/月统计图表。
-3. **用户管理**：
-   - 查看所有注册用户及其状态。
-   - 新增用户。
-   - 暂停或恢复用户，并清理该用户的活动会话。
-   - 编辑凭证或删除账号。
-4. **进入批改器**：从管理员面板进入作文批改页。
-5. **查看全部历史**：查看所有用户的批改记录。
+### 图片批改建议
 
-### 普通用户
+- 图片尽量清晰、裁剪完整
+- 多页作文可分多张上传
+- 如果识别仍不完整，优先减少单次上传页数或提高图片清晰度
 
-1. **登录**：通过认证中心流程完成登录。
-2. **批改作文**：
-   - 选择题型：应用文或读后续写。
-   - 选择输入方式：文本或图片。
-   - 输入或上传作文内容。
-   - 点击 **Start AI Grading**。
-3. **查看结果**：
-   - 查看 AI 评分与点评。
-   - 图片模式可通过悬浮按钮查看转写内容。
-   - 支持下载、打印或复制 Markdown 结果。
-4. **查看历史**：
-   - 点击顶部 **History** 按钮。
-   - 查看历史批改记录。
-   - 支持导出、复制、打印或删除单条记录。
+### 运维排查建议
 
-## 数据库结构
+- 如果任务长期停留在 `Queued`：
+  - 检查 Queue consumer 是否正常绑定
+  - 检查 Worker 是否已正确部署
+- 如果任务经常失败：
+  - 查看 Worker 日志
+  - 查看 `grading_tasks.error_message`
+- 如果识别结果异常：
+  - 查看 `grading_tasks.transcription`
+  - 检查 OCR prompt 与图片质量
 
-### Users 表
-- `id`：主键。
-- `username`：唯一用户名。
-- `password`：SHA-256 哈希后的密码。
-- `status`：`active` 或 `suspended`。
-- `created_at`：Unix 时间戳。
+## 常见问题
 
-### Usage Logs 表
-- `id`：主键。
-- `user_id`：指向用户表的外键。
-- `timestamp`：Unix 时间戳。
-- `action_type`：`grade_success` 或 `grade_error`。
-- `tokens`：token 使用量。
-- `error_details`：错误详情。
+### 任务一直停在 `Queued`
 
-### History 表
-- `id`：主键。
-- `user_id`：指向用户表的外键。
-- `timestamp`：Unix 时间戳。
-- `topic`：作文题目或主题。
-- `original_content`：原始文本或 OCR/转写文本。
-- `feedback`：AI 生成的 Markdown 批改结果。
+可能原因：
 
-### Sessions 表
-- `token`：主键，UUID。
-- `user_id`：指向用户表的外键，管理员时可为空。
-- `role`：`admin` 或 `user`。
-- `created_at`：Unix 时间戳。
-- `expires_at`：Unix 时间戳，通常为创建后 7 天。
+- Queue consumer 没有配置好
+- 当前部署没有包含 Queue consumer
+- `wrangler.toml` 中队列绑定名不一致
 
-## 设计理念
+建议检查：
 
-整个应用保持统一的设计语言：
-- **配色**：主要操作使用靛蓝和蓝色渐变。
-- **玻璃拟态**：卡片采用背景模糊与半透明效果。
-- **平滑动画**：包含 hover 效果和轻微位移动画。
-- **响应式布局**：采用移动端优先设计。
-- **可访问性**：使用清晰标签并兼顾键盘操作。
+- [wrangler.toml](/D:/Code/gaokao-english-grader/wrangler.toml)
+- Cloudflare Queue 控制台
+- 最新一次 Worker 部署状态
 
-## 安全特性
+### 图片 OCR 不完整
 
-1. **密码哈希**：用户密码以 SHA-256 哈希形式保存。
-2. **会话令牌**：使用安全的令牌式会话认证。
-3. **API Key 保护**：Gemini API Key 保存在 Cloudflare secret 中。
-4. **CORS 保护**：已配置安全的跨域策略。
-5. **输入校验**：同时进行前端和后端校验。
+可能原因：
 
-## API 接口
+- 图片不清晰
+- OCR 输出被截断
+- 单页内容过长
 
-### 认证
-- `POST /api/sso-callback`：接收认证中心回调的 JWT 并写入本地用户信息。
-- `GET /api/auth/verify`：校验当前会话令牌。
-- `POST /api/auth/logout`：退出登录并清理 SSO 状态。
+当前已做的修复：
 
-### 管理员
-- `GET /api/admin/users`：获取用户列表。
-- `GET /api/admin/stats`：获取使用统计。
+- 前端压缩
+- 按页 OCR
+- OCR 截断后自动续写
 
-### 历史记录
-- `GET /api/history`：获取批改历史。
-- `DELETE /api/history/:id`：删除历史记录。
+### 浏览器报网络错误
 
-### 作文批改
-- `POST /api/grade`：提交作文进行批改，保存历史并记录用量。
+可能原因：
 
-### 音频
-- `POST /api/audio/upload`：上传音频到 R2。
-- `POST /api/audio/segment`：对上传音频生成听力片段。
-- `GET /api/audio/files`：列出已上传音频。
-- `GET /api/audio/proxy/:key`：从 R2 代理音频文件。
-- `DELETE /api/audio/files/:id`：删除音频文件。
+- 图片体积仍然过大
+- 上传网络不稳定
 
-## 环境变量
+当前已做的缓解：
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `API_KEY` | Google Gemini API Key | 必填，使用 secret 保存 |
-| `API_DOMAIN` | Gemini API 域名 | `generativelanguage.googleapis.com` |
-| `MODEL_NAME` | 作文批改模型 | `gemini-3-pro-preview` |
-| `LISTEN_MODEL_NAME` | 听力模型 | `gemini-3-flash-preview` |
-| `SSO_URL` | 认证中心地址 | `https://accounts.aryuki.com` |
-| `SSO_APP_ID` | 认证中心应用 ID | `gaokao-english-grader` |
-| `SSO_SECRET_KEY` | 后端 SSO/配额调用密钥 | 在 `wrangler.toml` 中配置 |
-| `ADMIN_USER_ID` | 认证中心管理员用户 ID | `0` |
+- 上传前压缩
+- 后端队列化处理
 
-## 重要说明
+### 历史标题过短、不像文章概括
 
-1. **修改敏感默认值**：正式环境中请检查并替换任何默认或开发阶段的配置。
-2. **数据库**：首次使用前必须初始化 D1 数据库。
-3. **API Key**：请确认 Gemini API Key 有权访问所配置模型。
-4. **浏览器兼容性**：适用于支持 ES6+ 的现代浏览器。
+历史标题是专门给列表使用的 AI 摘要。现在 prompt 已要求标题尽量包含：
 
-## 贡献
+- 人物或场景
+- 核心事件
+- 主题或特点
 
-欢迎贡献代码。请确保：
-- 代码遵循现有风格规范。
-- 新功能附带适当文档。
-- 前端改动保持响应式表现。
-- 后端改动包含合理的错误处理。
+如果后续还要进一步调优，可以修改：
 
-## 许可证
+- [promptsV2.ts](/D:/Code/gaokao-english-grader/promptsV2.ts)
 
-本项目为专有软件，保留所有权利。
+## 关键文件
 
-## 支持
-
-如遇到问题或需要帮助：
-1. 检查数据库结构是否已正确初始化。
-2. 检查 API Key 与 SSO 配置是否正确。
-3. 查看浏览器控制台中的前端错误。
-4. 查看 Cloudflare Workers 日志中的后端错误。
+- [App.tsx](/D:/Code/gaokao-english-grader/App.tsx)
+- [types.ts](/D:/Code/gaokao-english-grader/types.ts)
+- [promptsV2.ts](/D:/Code/gaokao-english-grader/promptsV2.ts)
+- [utils/reportUtils.ts](/D:/Code/gaokao-english-grader/utils/reportUtils.ts)
+- [services/api.ts](/D:/Code/gaokao-english-grader/services/api.ts)
+- [services/geminiService.ts](/D:/Code/gaokao-english-grader/services/geminiService.ts)
+- [services/reportPrintV3.ts](/D:/Code/gaokao-english-grader/services/reportPrintV3.ts)
+- [components/EssayGraderV2.tsx](/D:/Code/gaokao-english-grader/components/EssayGraderV2.tsx)
+- [components/HistoryPageV3.tsx](/D:/Code/gaokao-english-grader/components/HistoryPageV3.tsx)
+- [components/report/ReportRenderer.tsx](/D:/Code/gaokao-english-grader/components/report/ReportRenderer.tsx)
+- [worker/app.ts](/D:/Code/gaokao-english-grader/worker/app.ts)
+- [worker/index.ts](/D:/Code/gaokao-english-grader/worker/index.ts)
+- [schema.sql](/D:/Code/gaokao-english-grader/schema.sql)
+- [migrate-grading-tasks.sql](/D:/Code/gaokao-english-grader/migrate-grading-tasks.sql)
+- [wrangler.toml](/D:/Code/gaokao-english-grader/wrangler.toml)
 
 ## Experience
 
-以下是近期修复和线上排障中总结出的经验：
+### Gemini 必须由后端调用
 
-- **Gemini 调用始终由后端执行**：浏览器只会把批改请求发送到本应用的 Worker，真正的 Gemini `generateContent` 调用发生在 [worker/index.ts](./worker/index.ts) 中。这有助于在终端用户本地网络无法直接访问 Gemini，但 Cloudflare Workers 侧仍可访问时继续正常工作。
-- **大图片可能在批改开始前就让请求失败**：图片模式下，如果把手机原图直接转成 Base64 发送，会形成非常大的 JSON 请求体，浏览器侧往往只看到 `Failed to fetch` 或 `ERR_CONNECTION_CLOSED`，而不是规范的 API 错误。
-- **前端图片压缩非常重要**：现在图片批改请求会在前端先进行缩放和压缩，再发送到 Worker，从而减少请求体积并提高稳定性。
-- **图片批改结果容易被截断**：图片模式要求模型同时输出完整转写和完整批改内容，容易触发模型输出长度上限，导致结果看起来“不完整”。
-- **Worker 现在会更稳妥地处理截断**：后端会检查 Gemini 返回是否被截断，必要时自动请求继续生成，并在最终结果仍可能不完整时给出明确信号。
-- **历史记录保存的是处理后的 Markdown**：保存到 `history.feedback` 中的是去掉转写标记后的 Markdown 批改结果，`history.original_content` 则保存原始作文文本或 OCR/转写文本。
-- **Markdown 复制现在是一等导出能力**：评分结果和历史详情都可以直接以 Markdown 形式复制，不依赖复制渲染后的 HTML。
+只要浏览器能访问你自己的 Worker，哪怕用户本地网络不能直连 Gemini，批改任务仍可以在 Cloudflare 后台完成。
 
----
+### 队列化比同步请求更稳定
 
-**Powered by Google Cloud & Gemini 3.0**
+随着 OCR、结构化输出、打印模板等链路变长，同步请求已经不够稳。使用 Queue 后，刷新页面不会中断批改任务。
+
+### OCR 需要处理截断问题
+
+长篇读后续写的图片内容容易超出单次 OCR 输出上限。增加 token 上限并在截断后自动续写，明显改善了识别完整度。
+
+### 历史标题不能混入正式报告
+
+历史列表标题适合浏览记录，但不应替代正式报告标题，也不应出现在范文中。
+
+### 结构化报告更适合用 JSON 导出
+
+当模型返回的是严格 JSON 时，直接复制和下载 JSON，稳定性和可追溯性都比继续使用 Markdown 更高。

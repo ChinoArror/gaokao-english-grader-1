@@ -1,11 +1,13 @@
-import { EssayType, InputMethod, EssaySubmission } from '../types';
-import { getPromptForType } from '../constants';
+import { GradeEssayRequest, GradeEssayResponse, EssaySubmission, InputMethod } from '../types';
 import { api } from './api';
 
-const MAX_IMAGE_DIMENSION = 1800;
-const MAX_IMAGE_FILE_SIZE = 1.5 * 1024 * 1024;
-const MAX_REQUEST_PAYLOAD_BYTES = 10 * 1024 * 1024;
-const JPEG_QUALITY = 0.82;
+const MAX_IMAGE_DIMENSION = 1400;
+const TARGET_IMAGE_FILE_SIZE = 850 * 1024;
+const MAX_REQUEST_PAYLOAD_BYTES = 6 * 1024 * 1024;
+const INITIAL_JPEG_QUALITY = 0.76;
+const MIN_JPEG_QUALITY = 0.52;
+const SCALE_STEP = 0.88;
+const MAX_COMPRESSION_PASSES = 6;
 
 const readFileAsDataUrl = async (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -27,166 +29,140 @@ const loadImage = async (src: string): Promise<HTMLImageElement> => {
   });
 };
 
-const dataUrlToBase64 = (dataUrl: string): string => {
-  const parts = dataUrl.split(',');
-  return parts[1] || '';
+const dataUrlToBlob = async (dataUrl: string): Promise<Blob> => {
+  const response = await fetch(dataUrl);
+  return response.blob();
 };
 
-const estimateBase64Bytes = (base64: string): number => {
-  return Math.ceil((base64.length * 3) / 4);
-};
+const canvasToBlob = (canvas: HTMLCanvasElement, mimeType: string, quality?: number): Promise<Blob | null> =>
+  new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), mimeType, quality);
+  });
 
-const fileToGenerativePart = async (file: File): Promise<{ mimeType: string; data: string }> => {
+const compressImageFile = async (file: File): Promise<File> => {
   const originalDataUrl = await readFileAsDataUrl(file);
-  const originalBase64 = dataUrlToBase64(originalDataUrl);
+  const originalBlob = await dataUrlToBlob(originalDataUrl);
 
   if (!file.type.startsWith('image/')) {
-    return { mimeType: file.type || 'application/octet-stream', data: originalBase64 };
+    return file;
   }
 
   const image = await loadImage(originalDataUrl);
   const longestEdge = Math.max(image.naturalWidth, image.naturalHeight);
-  const needsResize = longestEdge > MAX_IMAGE_DIMENSION;
-  const needsCompression = file.size > MAX_IMAGE_FILE_SIZE || needsResize;
-
-  if (!needsCompression) {
-    return { mimeType: file.type, data: originalBase64 };
-  }
-
-  const scale = needsResize ? MAX_IMAGE_DIMENSION / longestEdge : 1;
-  const width = Math.max(1, Math.round(image.naturalWidth * scale));
-  const height = Math.max(1, Math.round(image.naturalHeight * scale));
-
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-
-  const context = canvas.getContext('2d');
-  if (!context) {
-    return { mimeType: file.type, data: originalBase64 };
-  }
-
-  context.fillStyle = '#ffffff';
-  context.fillRect(0, 0, width, height);
-  context.drawImage(image, 0, 0, width, height);
-
+  let scale = longestEdge > MAX_IMAGE_DIMENSION ? MAX_IMAGE_DIMENSION / longestEdge : 1;
+  let quality = INITIAL_JPEG_QUALITY;
+  let bestBlob: Blob | null = null;
   const compressedMimeType = 'image/jpeg';
-  const compressedDataUrl = canvas.toDataURL(compressedMimeType, JPEG_QUALITY);
-  const compressedBase64 = dataUrlToBase64(compressedDataUrl);
 
-  if (estimateBase64Bytes(compressedBase64) >= estimateBase64Bytes(originalBase64)) {
-    return { mimeType: file.type, data: originalBase64 };
+  for (let pass = 0; pass < MAX_COMPRESSION_PASSES; pass++) {
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return file;
+    }
+
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+
+    const blob = await canvasToBlob(canvas, compressedMimeType, quality);
+    if (!blob) {
+      break;
+    }
+
+    if (!bestBlob || blob.size < bestBlob.size) {
+      bestBlob = blob;
+    }
+
+    if (blob.size <= TARGET_IMAGE_FILE_SIZE) {
+      bestBlob = blob;
+      break;
+    }
+
+    if (quality > MIN_JPEG_QUALITY) {
+      quality = Math.max(MIN_JPEG_QUALITY, quality - 0.08);
+    } else {
+      scale *= SCALE_STEP;
+    }
   }
 
-  return { mimeType: compressedMimeType, data: compressedBase64 };
+  const finalBlob = bestBlob && bestBlob.size < originalBlob.size ? bestBlob : originalBlob;
+  const finalType = finalBlob === originalBlob ? (file.type || originalBlob.type || compressedMimeType) : compressedMimeType;
+  const extension = finalType === 'image/jpeg' ? 'jpg' : (file.name.split('.').pop() || 'img');
+  const safeName = file.name.replace(/\.[^.]+$/, '') || 'upload';
+
+  return new File([finalBlob], `${safeName}.${extension}`, {
+    type: finalType,
+    lastModified: file.lastModified,
+  });
 };
 
 export const gradeEssay = async (
   submission: EssaySubmission
-): Promise<{ feedback: string; transcription?: string; truncated?: boolean }> => {
-  let promptTemplate = getPromptForType(submission.type);
-  let finalContents: any = [];
-  let meta: any = {
-    topic: submission.questionText || 'Essay Grading',
-    isImage: submission.method === InputMethod.IMAGE,
-    essayType: submission.type
+): Promise<GradeEssayResponse> => {
+  const request: GradeEssayRequest = {
+    type: submission.type,
+    method: submission.method,
+    questionText: submission.questionText,
+    essayContent: submission.essayContent,
   };
 
-  if (submission.method === InputMethod.TEXT) {
-    // Text based submission
-    const filledPrompt = promptTemplate
-      .replace('{{QUESTION}}', submission.questionText)
-      .replace('{{CONTENT}}', submission.essayContent);
+  let formData: FormData | null = null;
 
-    finalContents = [{ parts: [{ text: filledPrompt }] }];
-    meta.originalContent = submission.essayContent;
+  if (submission.method === InputMethod.IMAGE) {
+    formData = new FormData();
+    formData.append('type', submission.type);
+    formData.append('method', submission.method);
 
-  } else {
-    // Image based submission - request transcription
-    const instructions = `
-Please analyze the attached images carefully.
+    if (submission.questionText.trim()) {
+      formData.append('questionText', submission.questionText.trim());
+    }
 
-IMPORTANT: First, transcribe ALL text from the images. Output the transcription in this exact format:
-<<<TRANSCRIPTION>>>
-[Put all transcribed text here, preserving structure and layout]
-<<<END_TRANSCRIPTION>>>
+    if (submission.essayContent.trim()) {
+      formData.append('essayContent', submission.essayContent.trim());
+    }
 
-After the transcription section, provide your grading following these instructions:
+    let totalPayloadBytes = 0;
 
-${promptTemplate.replace('{{QUESTION}}', '[See Question Images]').replace('{{CONTENT}}', '[See Essay Images]')}
-
-Remember to include the <<<TRANSCRIPTION>>> section first, then your grading analysis.
-    `.trim();
-
-    const parts: any[] = [{ text: instructions }];
-
-    // Add Question Images
     if (submission.questionImages && submission.questionImages.length > 0) {
       for (const file of submission.questionImages) {
-        const qImage = await fileToGenerativePart(file);
-        parts.push({
-          inlineData: {
-            mimeType: qImage.mimeType,
-            data: qImage.data
-          }
-        });
+        const compressedFile = await compressImageFile(file);
+        totalPayloadBytes += compressedFile.size;
+        formData.append('questionImages', compressedFile, compressedFile.name);
       }
     }
 
-    // Add Essay Images
     if (submission.essayImages && submission.essayImages.length > 0) {
       for (const file of submission.essayImages) {
-        const eImage = await fileToGenerativePart(file);
-        parts.push({
-          inlineData: {
-            mimeType: eImage.mimeType,
-            data: eImage.data
-          }
-        });
+        const compressedFile = await compressImageFile(file);
+        totalPayloadBytes += compressedFile.size;
+        formData.append('essayImages', compressedFile, compressedFile.name);
       }
     }
 
-    finalContents = [{ parts: parts }];
+    if (totalPayloadBytes > MAX_REQUEST_PAYLOAD_BYTES) {
+      throw new Error('Uploaded images are still too large after compression. Please upload fewer images or smaller photos.');
+    }
   }
 
   try {
-    const payload = {
-      contents: finalContents,
-      generationConfig: {
-        maxOutputTokens: submission.method === InputMethod.IMAGE ? 8192 : 4096,
-        temperature: 0.7
-      }
-    };
-
-    const estimatedPayloadBytes = new TextEncoder().encode(JSON.stringify({ payload, meta })).length;
-    if (estimatedPayloadBytes > MAX_REQUEST_PAYLOAD_BYTES) {
+    const estimatedPayloadBytes = new TextEncoder().encode(JSON.stringify(request)).length;
+    if (!formData && estimatedPayloadBytes > MAX_REQUEST_PAYLOAD_BYTES) {
       throw new Error('Uploaded images are too large to send for grading. Please upload fewer images or smaller photos.');
     }
 
-    const data = await api.gradeEssay(payload, meta);
-
-    // Extract text from Gemini response
-    let feedbackText = typeof data.feedback === 'string' ? data.feedback : '';
-    let transcription = typeof data.transcription === 'string' ? data.transcription : undefined;
-
-    if (!feedbackText && data.candidates && data.candidates.length > 0 &&
-      data.candidates[0].content && data.candidates[0].content.parts) {
-      feedbackText = data.candidates[0].content.parts.map((p: any) => p.text || '').join('');
+    const data = await api.gradeEssay(formData ?? request, {
+      isImage: submission.method === InputMethod.IMAGE,
+    }) as GradeEssayResponse;
+    if (!data.task_uuid || !data.status) {
+      throw new Error('The grading service did not return a task id.');
     }
-
-    if (!transcription) {
-      const transcriptionMatch = feedbackText.match(/<<<TRANSCRIPTION>>>([\s\S]*?)<<<END_TRANSCRIPTION>>>/);
-      if (transcriptionMatch) {
-        transcription = transcriptionMatch[1].trim();
-        feedbackText = feedbackText.replace(/<<<TRANSCRIPTION>>>[\s\S]*?<<<END_TRANSCRIPTION>>>/, '').trim();
-      }
-    }
-
-    return {
-      feedback: feedbackText || "No response generated from AI.",
-      transcription,
-      truncated: Boolean(data.truncated)
-    };
+    return data;
 
   } catch (error: any) {
     console.error("Grading API Error:", error);
