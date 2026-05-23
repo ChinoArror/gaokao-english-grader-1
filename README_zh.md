@@ -228,6 +228,7 @@ History 左侧列表显示：
 - 题型标签
 - UUID 短标签
 - 时间
+- 轻量列表数据，打开 History 时不会先加载完整原文和报告
 
 History 右侧详情显示：
 
@@ -237,8 +238,19 @@ History 右侧详情显示：
 - JSON 下载
 - JSON 复制
 - PDF 打印
+- 详情加载中时会在详情区域显示转圈进度条
 
 删除按钮使用红色垃圾桶图标。
+
+宽屏下，History 保持左右两栏布局：左侧为历史条目，右侧为详情。
+
+窄屏或手机页面下，History 使用独立详情路径：
+
+- `/history` 只显示历史条目列表。
+- `/history/:task_uuid` 显示对应记录详情。
+- 顶部标题区和 `Back to Grader` 固定在列表上方。
+- 列表页只有下方条目区域滚动。
+- 详情页左上角有 `Back to History`，详情内容可上下滚动查看。
 
 ## API 概览
 
@@ -254,7 +266,9 @@ History 右侧详情显示：
 ### 历史相关
 
 - `GET /api/history`
-  - 返回任务视角的历史列表
+  - 返回轻量任务列表，不携带完整原文和报告大字段
+- `GET /api/tasks/:task_uuid`
+  - 返回单个任务详情，包括 OCR 文本和结构化报告 JSON
 - `DELETE /api/history/:task_uuid`
   - 删除某个任务/历史记录
 

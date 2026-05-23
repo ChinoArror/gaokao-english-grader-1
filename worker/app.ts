@@ -685,15 +685,19 @@ export default {
                 let rows;
                 let legacyRows;
                 if (sso.isAdmin) {
-                    rows = await env.DB.prepare('SELECT * FROM grading_tasks ORDER BY created_at DESC').all();
+                    rows = await env.DB.prepare(
+                        'SELECT task_uuid, user_id, status, essay_type, input_method, summary_title, topic, error_message, history_id, created_at, updated_at FROM grading_tasks ORDER BY created_at DESC'
+                    ).all();
                     legacyRows = await env.DB.prepare(
-                        "SELECT id, user_id, timestamp, topic, original_content, feedback, task_uuid FROM history WHERE task_uuid IS NULL OR task_uuid = '' ORDER BY timestamp DESC"
+                        "SELECT id, user_id, timestamp, topic, task_uuid FROM history WHERE task_uuid IS NULL OR task_uuid = '' ORDER BY timestamp DESC"
                     ).all();
                 } else {
                     const dbId = await getOrCreateUserId(env.DB, sso.uuid!);
-                    rows = await env.DB.prepare('SELECT * FROM grading_tasks WHERE user_id = ? ORDER BY created_at DESC').bind(dbId).all();
+                    rows = await env.DB.prepare(
+                        'SELECT task_uuid, user_id, status, essay_type, input_method, summary_title, topic, error_message, history_id, created_at, updated_at FROM grading_tasks WHERE user_id = ? ORDER BY created_at DESC'
+                    ).bind(dbId).all();
                     legacyRows = await env.DB.prepare(
-                        "SELECT id, user_id, timestamp, topic, original_content, feedback, task_uuid FROM history WHERE user_id = ? AND (task_uuid IS NULL OR task_uuid = '') ORDER BY timestamp DESC"
+                        "SELECT id, user_id, timestamp, topic, task_uuid FROM history WHERE user_id = ? AND (task_uuid IS NULL OR task_uuid = '') ORDER BY timestamp DESC"
                     ).bind(dbId).all();
                 }
 
@@ -702,8 +706,8 @@ export default {
                     user_id: row.user_id,
                     timestamp: row.created_at,
                     topic: row.topic || normalizeSummaryTitle(row.summary_title || undefined, row.task_uuid, row.status),
-                    original_content: row.original_content || '',
-                    feedback: row.report_json || '',
+                    original_content: '',
+                    feedback: '',
                     task_uuid: row.task_uuid,
                     status: row.status,
                     essay_type: row.essay_type,
@@ -717,8 +721,8 @@ export default {
                     user_id: Number(row.user_id || 0),
                     timestamp: Number(row.timestamp || 0),
                     topic: row.topic || '历史记录',
-                    original_content: row.original_content || '',
-                    feedback: row.feedback || '',
+                    original_content: '',
+                    feedback: '',
                     task_uuid: undefined,
                     status: 'successful' as const,
                     essay_type: undefined,

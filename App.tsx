@@ -99,6 +99,12 @@ function App() {
         ) : <Navigate to="/login" />
       } />
 
+      <Route path="/history/:taskUuid" element={
+        userRole ? (
+          <HistoryPage onBack={() => navigate('/grader')} />
+        ) : <Navigate to="/login" />
+      } />
+
       <Route path="/listen" element={
         userRole ? (
           <ListeningPage />

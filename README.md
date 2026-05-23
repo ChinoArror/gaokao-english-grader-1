@@ -225,6 +225,7 @@ The History list displays:
 - type badge
 - short UUID badge
 - timestamp
+- lightweight list data only, so the page can render quickly without loading full reports first
 
 The detail panel displays:
 
@@ -233,8 +234,19 @@ The detail panel displays:
 - AI feedback
 - JSON copy / download
 - PDF print
+- a loading spinner while the selected task detail is being fetched
 
 The delete button is a red trash icon.
+
+On wide screens, History keeps the two-column layout: task list on the left and detail panel on the right.
+
+On narrow screens, History uses a route-based detail view:
+
+- `/history` shows only the task list.
+- `/history/:task_uuid` shows the selected task detail.
+- The top header and `Back to Grader` button stay fixed above the list area.
+- Only the task list area scrolls on the list page.
+- The detail page has a `Back to History` button at the top-left and scrolls vertically like a normal report page.
 
 ## API Overview
 
@@ -250,7 +262,9 @@ The delete button is a red trash icon.
 ### History
 
 - `GET /api/history`
-  - returns task-oriented history data
+  - returns lightweight task-oriented history list data
+- `GET /api/tasks/:task_uuid`
+  - returns full task detail, including OCR text and structured report JSON
 - `DELETE /api/history/:task_uuid`
   - deletes a task/history record
 
